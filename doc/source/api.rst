@@ -30,11 +30,11 @@ API for specific function definitions.
     :py:mod:`neon.backends` | Computational backend (CPU or GPU) | :doc:`neon backend<backends>`
     :py:mod:`neon.data` | Data loading and handling | :doc:`Data loading<loading_data>`, :doc:`Datasets<datasets>`
     :py:mod:`neon.models` | Model architecture | :doc:`Models<models>`
-    :py:mod:`neon.layers` | Layer objects | :doc:`Layers<layers>`, :doc:`Creating new layers<creating_new_layers>`
+    :py:mod:`neon.layers` | Layer objects | :doc:`Layers<layers>`, :doc:`Creating new layers<creating_new_layers>`, :doc:`Layer containers<layer_containers>`
     :py:mod:`neon.initializers` | Weight initializer methods | :doc:`Initializers<initializers>`
-    :py:mod:`neon.transforms` | Activation functions and Costs/Metrics | :doc:`Costs and Metrics<costs>`
+    :py:mod:`neon.transforms` | Activation functions and Costs/Metrics | :doc:`Activations<activations>`, :doc:`Costs and Metrics<costs>`
     :py:mod:`neon.callbacks` | Callbacks during model training | :doc:`Callbacks<callbacks>`
-    :py:mod:`neon.optimizers` | Learning algorithms | :doc:`Optimizers<optimizers>`
+    :py:mod:`neon.optimizers` | Learning algorithms | :doc:`Optimizers<optimizers>`, :doc:`Learning schedules<learning_schedules>`
     :py:mod:`neon.visualizations` | Visualization of training cost and weight histograms | :doc:`Visualizing results<tools>`
     :py:mod:`neon.util` | Utility module |
 
@@ -58,7 +58,7 @@ backend.
 .. py:module:: neon.backends
 
 This module defines the computational backend of neon, either based on CPU or GPU
-hardware. Included are classes that implement neon's auto-differentation feature.
+hardware. Included are classes that implement neon's auto-differentiation feature.
 
 .. autosummary::
    :toctree: generated/
@@ -68,6 +68,7 @@ hardware. Included are classes that implement neon's auto-differentation feature
    neon.backends.backend.Tensor
    neon.backends.backend.Backend
    neon.backends.backend.OpTreeNode
+   neon.backends.backend.Block
    neon.backends.nervanacpu.CPUTensor
    neon.backends.nervanacpu.NervanaCPU
    neon.backends.nervanagpu.GPUTensor
@@ -91,8 +92,15 @@ and iterating through minibatches of data during training.
 
   neon.data.dataiterator.NervanaDataIterator
   neon.data.dataiterator.ArrayIterator
+  neon.data.hdf5iterator.HDF5Iterator
+  neon.data.hdf5iterator.HDF5IteratorAutoencoder
+  neon.data.hdf5iterator.HDF5IteratorOneHot
   neon.data.imageloader.ImageLoader
   neon.data.batch_writer.BatchWriter
+  neon.data.dataloader.DataLoader
+  neon.data.media.ImageParams
+  neon.data.media.VideoParams
+  neon.data.media.AudioParams
 
 Dataset objects for storing data from common modalities (e.g. Text), as well as specific stock datasets (e.g. MNIST, CIFAR-10, Penn Treebank) are included.
 
@@ -107,10 +115,23 @@ Dataset objects for storing data from common modalities (e.g. Text), as well as 
   neon.data.imagecaption.Flickr8k
   neon.data.imagecaption.Flickr30k
   neon.data.imagecaption.Coco
+  neon.data.pascal_voc.PASCALVOC
+  neon.data.pascal_voc.PASCALVOCTrain
+  neon.data.pascal_voc.PASCALVOCInference
   neon.data.text.Text
   neon.data.text.Shakespeare
   neon.data.text.PTB
+  neon.data.text.HutterPrize
   neon.data.text.IMDB
+  neon.data.questionanswer.QA
+  neon.data.questionanswer.BABI
+  neon.data.ticker.Ticker
+  neon.data.ticker.Task
+  neon.data.ticker.CopyTask
+  neon.data.ticker.RepeatCopyTask
+  neon.data.ticker.PrioritySortTask
+  neon.data.speech.Speech
+  neon.data.video.Video
 
 ``neon.models``
 ---------------
@@ -154,8 +175,12 @@ Common Layers
     neon.layers.layer.LookupTable
     neon.layers.layer.Activation
     neon.layers.layer.BatchNorm
+    neon.layers.layer.BatchNormAutodiff
     neon.layers.layer.Pooling
     neon.layers.layer.LRN
+    neon.layers.layer.DataTransform
+    neon.layers.layer.BranchNode
+    neon.layers.layer.SkipNode
 
 Convolutional Layers
 
@@ -181,6 +206,7 @@ Recurrent Layers
     neon.layers.recurrent.BiLSTM
     neon.layers.recurrent.DeepBiRNN
     neon.layers.recurrent.DeepBiLSTM
+    neon.layers.recurrent.RecurrentOutput
     neon.layers.recurrent.RecurrentSum
     neon.layers.recurrent.RecurrentMean
     neon.layers.recurrent.RecurrentLast
@@ -193,14 +219,15 @@ should use the other containers.
     :toctree: generated/
     :nosignatures:
 
-    neon.layers.layer.BranchNode
-    neon.layers.layer.SkipNode
     neon.layers.container.LayerContainer
     neon.layers.container.Sequential
     neon.layers.container.Tree
+    neon.layers.container.SingleOutputTree
+    neon.layers.container.Broadcast
+    neon.layers.container.MergeSum
     neon.layers.container.MergeBroadcast
     neon.layers.container.MergeMultistream
-
+    neon.layers.container.RoiPooling
 
 Generic cost layers are implemented in the following classes. Note that these
 classes subclass from `NervanaObject`, not any base layer class.
@@ -312,6 +339,8 @@ by providing a schedule.
   :nosignatures:
 
   neon.optimizers.optimizer.Schedule
+  neon.optimizers.optimizer.StepSchedule
+  neon.optimizers.optimizer.PowerSchedule
   neon.optimizers.optimizer.ExpSchedule
   neon.optimizers.optimizer.PolySchedule
 
@@ -320,7 +349,7 @@ by providing a schedule.
 .. py:module:: neon.callbacks
 
 Callbacks are methods that are called at user-defined times during training. They can
-be scheduled to occur at the begining/end of training/minibatch/epoch. Callbacks can
+be scheduled to occur at the beginning/end of training/minibatch/epoch. Callbacks can
 be used to, for example, periodically report training loss or save weight histograms.
 
 .. autosummary::
@@ -329,16 +358,20 @@ be used to, for example, periodically report training loss or save weight histog
 
    neon.callbacks.callbacks.Callbacks
    neon.callbacks.callbacks.Callback
-   neon.callbacks.callbacks.SerializeModelCallback
+   neon.callbacks.callbacks.RunTimerCallback
    neon.callbacks.callbacks.TrainCostCallback
-   neon.callbacks.callbacks.LossCallback
-   neon.callbacks.callbacks.MetricCallback
-   neon.callbacks.callbacks.HistCallback
    neon.callbacks.callbacks.ProgressBarCallback
    neon.callbacks.callbacks.TrainLoggerCallback
+   neon.callbacks.callbacks.SerializeModelCallback
+   neon.callbacks.callbacks.LossCallback
+   neon.callbacks.callbacks.MetricCallback
+   neon.callbacks.callbacks.MultiLabelStatsCallback
+   neon.callbacks.callbacks.HistCallback
    neon.callbacks.callbacks.SaveBestStateCallback
    neon.callbacks.callbacks.EarlyStopCallback
    neon.callbacks.callbacks.DeconvCallback
+   neon.callbacks.callbacks.BatchNormTuneCallback
+   neon.callbacks.callbacks.WatchTickerCallback
 
 ``neon.visualizations``
 -----------------------
@@ -350,11 +383,8 @@ This module generates visualizations using the ``nvis`` command line function.
    :toctree: generated/
    :nosignatures:
 
-   neon.visualizations.data.create_minibatch_x
-   neon.visualizations.data.create_epoch_x
-   neon.visualizations.data.h5_cost_data
-   neon.visualizations.figure.x_label
-   neon.visualizations.figure.cost_fig
+   neon.visualizations.data
+   neon.visualizations.figure
 
 
 ``neon.util``
@@ -369,5 +399,10 @@ of objects.
   :nosignatures:
 
   neon.util.argparser.NeonArgparser
+  neon.util.argparser.extract_valid_args
+  neon.util.compat
+  neon.util.persist.load_class
   neon.util.persist.load_obj
   neon.util.persist.save_obj
+  neon.util.modeldesc.ModelDescription
+  neon.util.yaml_parse

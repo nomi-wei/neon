@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2014 Nervana Systems Inc.  All rights reserved.
+# Copyright 2014-2016 Nervana Systems Inc.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,10 +18,9 @@
 # set empty to prevent any implicit rules from firing.
 .SUFFIXES:
 
-# where our installed python packages will live
-VIRTUALENV_DIR := .venv
-VIRTUALENV_EXE := virtualenv -p python2.7  # use pyvenv for python3 install
-ACTIVATE := $(VIRTUALENV_DIR)/bin/activate
+# Choose default Python version; overrideable with "make python2" or "make python3".
+PY := $(shell python --version 2>&1  | cut -c8)
+VIRTUALENV_DIR_BASE := .venv
 
 # get release version info
 RELEASE := $(strip $(shell grep '^VERSION *=' setup.py | cut -f 2 -d '=' \
@@ -33,10 +32,10 @@ HAS_GPU := $(shell nvcc --version > /dev/null 2>&1 && echo true)
 
 ifdef HAS_GPU
 # Get CUDA_ROOT for LD_RUN_PATH
-export CUDA_ROOT:=$(patsubst %/bin/nvcc,%, $(realpath $(shell which nvcc)))
+export CUDA_ROOT:=$(abspath $(shell which nvcc)/../..)
 else
 # Try to find CUDA.  Kernels will still need nvcc in path
-export CUDA_ROOT:=$(firstword $(wildcard $(addprefix /usr/local/, cuda-7.5 cuda-7.0 cuda)))
+export CUDA_ROOT:=$(firstword $(wildcard $(addprefix /usr/local/, cuda-8.0 cuda-7.5 cuda-7.0 cuda)))
 
 ifdef CUDA_ROOT
 export PATH:=$(CUDA_ROOT)/bin:$(PATH)
@@ -63,37 +62,54 @@ TEST_DIRS := tests/
 # turn off GPU tests if no GPU present
 # TODO: refactor neon/backends/tests to run under CPU
 ifneq ($(HAS_GPU), true)
-	TEST_DIRS := -k cpu $(TEST_DIRS)
+	TEST_DIRS := -k cpu -m "not hasgpu" $(TEST_DIRS)
 else
-	TEST_DIRS := $(TEST_DIRS) neon/backends/tests/
+	TEST_DIRS := -m "hasgpu or not hasgpu" $(TEST_DIRS)
 endif
 
 # this variable controls where we publish Sphinx docs to
 DOC_DIR := doc
 DOC_PUB_RELEASE_PATH := $(DOC_PUB_PATH)/$(RELEASE)
 
-# Maxwell assembler project related
-MAXAS_SRC_URL := https://github.com/NervanaSystems/maxas.git
-MAXAS_DL_DIR := $(VIRTUALENV_DIR)/maxas
-MAXAS := $(VIRTUALENV_DIR)/bin/maxas.pl
-MAXAS_PLIB := PERL5LIB=$(VIRTUALENV_DIR)/maxas/lib
-
-# GPU Kernel compilation related
-KERNEL_BUILDER := neon/backends/make_kernels.py
-KERNEL_BUILDER_BUILD_OPTS := --kernels
-KERNEL_BUILDER_CLEAN_OPTS := --clean
-
 # neon compiled objects
 DATA_LOADER := loader
 
-.PHONY: default env maxas kernels sysinstall sysinstall_nodeps neon_install \
-	    sysdeps sysuninstall clean_py clean_maxas clean_so clean_kernels \
-	    clean test coverage style lint check doc html release examples \
+ifeq ($(PY), 2)
+	VIRTUALENV_EXE := virtualenv -p python2.7
+	PYLINT3K_ARGS := --disable=no-absolute-import
+	VIRTUALENV_DIR = $(VIRTUALENV_DIR_BASE)$(PY)
+	ACTIVATE = $(VIRTUALENV_DIR)/bin/activate
+else
+	VIRTUALENV_EXE := python3 -m venv
+	PYLINT3K_ARGS :=
+	VIRTUALENV_DIR = $(VIRTUALENV_DIR_BASE)$(PY)
+	ACTIVATE = $(VIRTUALENV_DIR)/bin/activate
+endif
+
+.PHONY: default all env sysinstall sysinstall_nodeps neon_install python2 python3 \
+	    sysdeps sysuninstall clean_py clean_so \
+	    clean test coverage style lint lint3k check doc html release examples \
 	    serialize_check $(DATA_LOADER)
 
 default: env
 
-env: $(ACTIVATE) kernels $(DATA_LOADER)
+all:
+	$(MAKE) PY=3 TEST_OPTS='$(TEST_OPTS)' test
+	$(MAKE) PY=2 TEST_OPTS='$(TEST_OPTS)' test
+
+env: $(ACTIVATE) $(DATA_LOADER)
+
+python2: VIRTUALENV_EXE := virtualenv -p python2.7
+python2: VIRTUALENV_DIR := $(VIRTUALENV_DIR_BASE)2
+python2: ACTIVATE := $(VIRTUALENV_DIR)/bin/activate
+python2: PYLINT3K_ARGS := --disable=no-absolute-import
+python2: env
+
+python3: VIRTUALENV_EXE := python3 -m venv
+python3: VIRTUALENV_DIR := $(VIRTUALENV_DIR_BASE)3
+python3: ACTIVATE := $(VIRTUALENV_DIR)/bin/activate
+python3: PYLINT3K_ARGS :=
+python3: env
 
 $(ACTIVATE): requirements.txt gpu_requirements.txt vis_requirements.txt
 	@echo "Updating virtualenv dependencies in: $(VIRTUALENV_DIR)..."
@@ -115,47 +131,21 @@ ifeq ($(HAS_GPU), true)
 endif
 	@echo "Installing neon in development mode..."
 	@. $(ACTIVATE); python setup.py develop
-	@echo "######################"
+	@rm -f $(VIRTUALENV_DIR_BASE); ln -s $(VIRTUALENV_DIR) $(VIRTUALENV_DIR_BASE)
+	@echo "###########################################################"
 	@echo "Setup complete.  Type:"
 	@echo "    . '$(ACTIVATE)'"
-	@echo "to work interactively"
-	@echo "######################"
+	@echo "to work interactively ($(VIRTUALENV_DIR) also symlinked to $(VIRTUALENV_DIR_BASE))"
+	@echo "###########################################################"
 	@touch $(ACTIVATE)
 	@echo
-
-maxas: $(MAXAS_DL_DIR)
-ifeq ($(HAS_GPU), true)
-	@cd $(MAXAS_DL_DIR) && git pull >/dev/null 2>&1
-	@test -f $(MAXAS) ||\
-		{ echo "Installing maxas..." &&\
-		  mkdir -p $(dir $(MAXAS)) &&\
-		  ln -s ../maxas/bin/maxas.pl $(MAXAS) ;\
-		  echo "";\
-		}
-endif
-
-$(MAXAS_DL_DIR):
-ifeq ($(HAS_GPU), true)
-	@test -d $(MAXAS_DL_DIR) ||\
-		{ echo "Cloning maxas repo..." ;\
-		  git clone $(MAXAS_SRC_URL) $(MAXAS_DL_DIR) ;\
-		  echo "";\
-		}
-endif
-
-kernels: maxas
-ifeq ($(HAS_GPU), true)
-	@$(MAXAS_PLIB) PATH=$(dir $(MAXAS)):$$PATH \
-		$(KERNEL_BUILDER) $(KERNEL_BUILDER_BUILD_OPTS)
-	@echo
-endif
 
 $(DATA_LOADER):
 	-@cd $(DATA_LOADER) && $(MAKE) bin/loader.so HAS_GPU=$(HAS_GPU)
 
 # TODO: handle kernel/.so compilation via setup.py directly
-sysinstall_nodeps: kernels $(DATA_LOADER) neon_install
-sysinstall: sysdeps kernels $(DATA_LOADER) neon_install
+sysinstall_nodeps: $(DATA_LOADER) neon_install
+sysinstall: sysdeps $(DATA_LOADER) neon_install
 neon_install:
 	@echo "Installing neon system wide..."
 	@pip install .
@@ -189,29 +179,19 @@ clean_so:
 	@cd $(DATA_LOADER) && $(MAKE) clean
 	@echo
 
-clean_maxas:
-ifeq ($(HAS_GPU), true)
-	@echo "Cleaning maxas installation and repo files..."
-	@rm -f $(MAXAS)
-	@rm -rf $(MAXAS_DL_DIR)
-	@echo
-endif
-
-clean_kernels:
-ifeq ($(HAS_GPU), true)
-	@echo "Cleaning compiled gpu kernel files..."
-	@test -f $(ACTIVATE) && . $(ACTIVATE); $(KERNEL_BUILDER) $(KERNEL_BUILDER_CLEAN_OPTS)
-	@echo
-endif
-
-clean: clean_py clean_so clean_maxas clean_kernels
+clean: clean_py clean_so
 	@echo "Removing virtual environment files..."
-	@rm -rf $(VIRTUALENV_DIR)
+	@rm -rf $(VIRTUALENV_DIR_BASE) $(VIRTUALENV_DIR_BASE)2 $(VIRTUALENV_DIR_BASE)3
 	@echo
 
 test: env
 	@echo "Running unit tests..."
 	@. $(ACTIVATE); py.test $(TEST_OPTS) $(TEST_DIRS)
+	@echo
+
+systest:
+	@echo "Running unit tests..."
+	py.test $(TEST_OPTS) $(TEST_DIRS)
 	@echo
 
 examples: env
@@ -230,15 +210,20 @@ serialize_check: env
 	@echo
 
 coverage: env
-	@. $(ACTIVATE); py.test --cov=neon tests/ neon/backends/tests/
+	@. $(ACTIVATE); py.test --cov=neon tests/
 	@echo
 
 style: env
 	@. $(ACTIVATE); flake8 $(STYLE_CHECK_OPTS) $(STYLE_CHECK_DIRS)
+	@. $(ACTIVATE); pylint --reports=n --py3k $(PYLINT3K_ARGS) --ignore=.venv *
 	@echo
 
 lint: env
 	@. $(ACTIVATE); pylint --output-format=colorized neon
+	@echo
+
+lint3k: env
+	@. $(ACTIVATE); pylint --py3k $(PYLINT3K_ARGS) --ignore=.venv *
 	@echo
 
 check: env

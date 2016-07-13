@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2014 Nervana Systems Inc.
+# Copyright 2014-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -17,10 +17,31 @@ import logging
 import os
 import pkgutil
 import sys
+import appdirs
 
-from neon.util.compat import pickle
+from neon.util.compat import pickle, pickle_load
 
 logger = logging.getLogger(__name__)
+
+
+def get_cache_dir(subdir=None):
+    """
+    Function for getting cache directory to store reused files like kernels, or scratch space
+    for autotuning, etc.
+    """
+    cache_dir = os.environ.get("NEON_CACHE_DIR")
+
+    if cache_dir is None:
+        cache_dir = appdirs.user_cache_dir("neon", "neon")
+
+    if subdir:
+        subdir = subdir if isinstance(subdir, list) else [subdir]
+        cache_dir = os.path.join(cache_dir, *subdir)
+
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+
+    return cache_dir
 
 
 def ensure_dirs_exist(path):
@@ -63,7 +84,7 @@ def save_obj(obj, save_path):
     logger.debug("serializing object to: %s", save_path)
     ensure_dirs_exist(save_path)
 
-    pickle.dump(obj, open(save_path, 'wb'), -1)
+    pickle.dump(obj, open(save_path, 'wb'), 2)
 
 
 def load_obj(load_path):
@@ -82,14 +103,14 @@ def load_obj(load_path):
         load_path = os.path.expandvars(os.path.expanduser(load_path))
         if load_path.endswith('.gz'):
             import gzip
-            load_path = gzip.open(load_path)
+            load_path = gzip.open(load_path, 'rb')
         else:
-            load_path = open(load_path)
+            load_path = open(load_path, 'rb')
     fname = load_path.name
 
     logger.debug("deserializing object from:  %s", fname)
     try:
-        return pickle.load(load_path)
+        return pickle_load(load_path)
     except AttributeError:
         msg = ("Problems deserializing: %s.  Its possible the interface "
                "for this object has changed since being serialized.  You "
@@ -131,6 +152,20 @@ def load_class(ctype):
 
 
 def serialize(model, callbacks=None, datasets=None, dump_weights=True, keep_states=True):
+    """
+    Serialize the model, callbacks and datasets.
+
+    Arguments:
+        model (Model): Model object
+        callbacks (Callbacks, optional): Callbacks
+        datasets (iterable, optional): Datasets
+        dump_weights (bool, optional): Ignored
+        keep_states (bool, optional): Whether to save optimizer states too.
+
+    Returns:
+        dict: Model data, callbacks and datasets
+
+    """
     pdict = model.serialize(fn=None, keep_states=keep_states)
     if callbacks is not None:
         pdict['callbacks'] = callbacks.serialize()

@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ----------------------------------------------------------------------------
+from __future__ import division
+from builtins import str
+
 import h5py
 import numpy as np
 
 
 def create_minibatch_x(minibatches, minibatch_markers, epoch_axis):
     """
-    Helper function to build x axis for data captured per minibatch
+    Helper function to build x axis for data captured per minibatch.
 
     Arguments:
         minibatches (int): how many total minibatches
@@ -30,7 +33,7 @@ def create_minibatch_x(minibatches, minibatch_markers, epoch_axis):
         last_e = 0
         for e_idx, e in enumerate(minibatch_markers):
             e_minibatches = e - last_e
-            x[last_e:e] = e_idx + (np.arange(float(e_minibatches))/e_minibatches)
+            x[last_e:e] = e_idx + (np.arange(float(e_minibatches)) / e_minibatches)
             last_e = e
     else:
         x = np.arange(minibatches)
@@ -40,7 +43,7 @@ def create_minibatch_x(minibatches, minibatch_markers, epoch_axis):
 
 def create_epoch_x(points, epoch_freq, minibatch_markers, epoch_axis):
     """
-    Helper function to build x axis for points captured per epoch
+    Helper function to build x axis for points captured per epoch.
 
     Arguments:
         points (int): how many data points need a corresponding x axis points
@@ -55,10 +58,10 @@ def create_epoch_x(points, epoch_freq, minibatch_markers, epoch_axis):
         for e_idx, e in enumerate(minibatch_markers):
             e_minibatches = e - last_e
             if (e_idx + 1) % epoch_freq == 0:
-                x[e_idx/epoch_freq] = e_idx + (e_minibatches - 1) / e_minibatches
+                x[e_idx // epoch_freq] = e_idx + ((e_minibatches - 1) // e_minibatches)
             last_e = e
     else:
-        x = minibatch_markers[(epoch_freq-1)::epoch_freq] - 1
+        x = minibatch_markers[(epoch_freq - 1)::epoch_freq] - 1
 
     return x
 
@@ -66,6 +69,10 @@ def create_epoch_x(points, epoch_freq, minibatch_markers, epoch_axis):
 def h5_cost_data(filename, epoch_axis=True):
     """
     Read cost data from hdf5 file. Generate x axis data for each cost line.
+
+    Arguments:
+        filename (str): Filename with hdf5 cost data
+        epoch_axis (bool): whether to render epoch or minibatch as the integer step in the x axis
 
     Returns:
         list of tuples of (name, x data, y data)
@@ -78,11 +85,11 @@ def h5_cost_data(filename, epoch_axis=True):
         total_minibatches = config.attrs['total_minibatches']
         minibatch_markers = time_markers['minibatch']
 
-        for name, ydata in cost.iteritems():
+        for name, ydata in cost.items():
             y = ydata[...]
             if ydata.attrs['time_markers'] == 'epoch_freq':
                 y_epoch_freq = ydata.attrs['epoch_freq']
-                assert len(y) == total_epochs / y_epoch_freq
+                assert len(y) == total_epochs // y_epoch_freq
                 x = create_epoch_x(len(y), y_epoch_freq, minibatch_markers, epoch_axis)
 
             elif ydata.attrs['time_markers'] == 'minibatch':
@@ -98,6 +105,16 @@ def h5_cost_data(filename, epoch_axis=True):
 
 
 def h5_hist_data(filename, epoch_axis=True):
+    """
+    Read histogram data from hdf5 file. Generate x axis data for each hist line.
+
+    Arguments:
+        filename (str): Filename with hdf5 cost data
+        epoch_axis (bool): whether to render epoch or minibatch as the integer step in the x axis
+
+    Returns:
+        list of tuples of (name, data, dh, dw, bins, offset)
+    """
     ret = list()
     with h5py.File(filename, "r") as f:
         if 'hist' in f:
@@ -107,7 +124,7 @@ def h5_hist_data(filename, epoch_axis=True):
             total_epochs = config.attrs['total_epochs']
             total_minibatches = config.attrs['total_minibatches']
 
-            for hname, hdata in hists.iteritems():
+            for hname, hdata in hists.items():
                 dw = total_epochs if (time_markers == 'epoch_freq') else total_minibatches
                 dh = bins
                 ret.append((hname, hdata[...], dh, dw, bins, offset))
@@ -143,7 +160,7 @@ def convert_rgb_to_bokehrgba(img_data, downsample=1):
 
     # add an alpha channel to the image and recast from pixels of u8u8u8u8 to u32
     bokeh_img = np.dstack([img_data, 255 * np.ones((img_h, img_w), np.uint8)])
-    final_image = bokeh_img.reshape(img_h, img_w * (C+1)).view(np.uint32)
+    final_image = bokeh_img.reshape(img_h, img_w * (C + 1)).view(np.uint32)
 
     return final_image
 
@@ -152,18 +169,21 @@ def h5_deconv_data(filename):
     """
     Read deconv visualization data from hdf5 file.
 
+    Arguments:
+        filename (str): Filename with hdf5 deconv data
+
     Returns:
         list of lists. Each inner list represents one layer, and consists of
         tuples (fm, deconv_data)
     """
     ret = list()
     with h5py.File(filename, "r") as f:
-        if 'deconv' not in f.keys():
+        if 'deconv' not in list(f.keys()):
             return None
         act_data = f['deconv/max_act']
         img_data = f['deconv/img']
 
-        for layer in act_data.keys():
+        for layer in list(act_data.keys()):
             layer_data = list()
             for fm in range(act_data[layer]['vis'].shape[0]):
 

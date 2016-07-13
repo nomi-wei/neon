@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,9 +14,23 @@
 # limitations under the License.
 # ----------------------------------------------------------------------------
 """
-Runs one epoch of Alexnet on imagenet data.
-For running complete alexnet
-alexnet.py -e 90 -eval 1 -s <save-path> -w <path-to-saved-batches>
+Alexnet - An implementation of a deep convolutional neural network for
+classification of images from the ImageNet 2012 competition based on
+Krizhevsky, Sutskever and Hinton, 2012.
+
+Reference:
+
+    ImageNet Classification with Deep Convolutional Neural Networks `[Krizhevsky2015]`_
+..  _[Krizhevsky2015]: http://papers.nips.cc/paper/\
+4824-imagenet-classification-with-deep-convolutional-neural-networks
+
+Usage:
+
+    Before training, prepare ImageNet macrobatches as described at
+    http://neon.nervanasys.com/docs/latest/datasets.html#imagenet
+
+    python examples/alexnet.py --data_dir </path/to/ImageNet/macrobatches> --epochs 90
+
 """
 
 from neon.util.argparser import NeonArgparser
@@ -38,7 +52,7 @@ args = parser.parse_args()
 img_set_options = dict(repo_dir=args.data_dir,
                        inner_size=224,
                        subset_pct=args.subset_pct)
-train = ImageLoader(set_name='train', scale_range=(256, 384), **img_set_options)
+train = ImageLoader(set_name='train', scale_range=(256, 256), **img_set_options)
 test = ImageLoader(set_name='validation', scale_range=(256, 256), do_transforms=False,
                    **img_set_options)
 
@@ -63,7 +77,7 @@ layers = [Conv((11, 11, 64), init=Gaussian(scale=0.01), bias=Constant(0),
 model = Model(layers=layers)
 
 # drop weights LR by 1/250**(1/3) at epochs (23, 45, 66), drop bias LR by 1/10 at epoch 45
-weight_sched = Schedule([22, 44, 65], (1/250.)**(1/3.))
+weight_sched = Schedule([22, 44, 65], 0.15874)
 opt_gdm = GradientDescentMomentum(0.01, 0.9, wdecay=0.0005, schedule=weight_sched,
                                   stochastic_round=args.rounding)
 opt_biases = GradientDescentMomentum(0.02, 0.9, schedule=Schedule([44], 0.1),

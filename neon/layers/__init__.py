@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -15,8 +15,8 @@
 from neon.layers.layer import (Linear, Bias, Affine, Conv, Convolution, GeneralizedCost, Dropout,
                                Pooling, Activation, DataTransform, BatchNorm, BatchNormAutodiff,
                                Deconv, Deconvolution, GeneralizedCostMask, LookupTable,
-                               BranchNode, SkipNode, LRN, ColorNoise)
+                               BranchNode, SkipNode, LRN)
 from neon.layers.recurrent import (Recurrent, LSTM, GRU, RecurrentSum, RecurrentMean, RecurrentLast,
-                                   BiRNN, BiLSTM, DeepBiRNN, DeepBiLSTM)
+                                   BiRNN, BiBNRNN, BiLSTM, DeepBiRNN, DeepBiLSTM)
 from neon.layers.container import (Tree, Sequential, MergeMultistream, MergeBroadcast, Multicost,
                                    RoiPooling, MergeSum, SingleOutputTree)

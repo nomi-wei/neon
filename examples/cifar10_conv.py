@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,8 +14,13 @@
 # limitations under the License.
 # ----------------------------------------------------------------------------
 """
-Small CIFAR10 based convolutional neural network. Showcases the use of cost
+Small convolutional neural network on CIFAR10 data. Showcases the use of cost
 scaling with the fp16 data format.
+
+Usage:
+
+    python examples/cifar10_conv.py
+
 """
 
 import numpy as np
@@ -27,6 +32,8 @@ from neon.optimizers import GradientDescentMomentum
 from neon.transforms import Misclassification, Rectlin, Softmax, CrossEntropyMulti
 from neon.callbacks.callbacks import Callbacks
 from neon.util.argparser import NeonArgparser
+from neon import logger as neon_logger
+
 
 # parse the command line arguments
 parser = NeonArgparser(__doc__)
@@ -48,7 +55,7 @@ if args.datatype in [np.float32, np.float64]:
                                       momentum_coef=0.9,
                                       stochastic_round=args.rounding)
 elif args.datatype in [np.float16]:
-    opt_gdm = GradientDescentMomentum(learning_rate=0.01/cost_scale,
+    opt_gdm = GradientDescentMomentum(learning_rate=0.01 / cost_scale,
                                       momentum_coef=0.9,
                                       stochastic_round=args.rounding)
 
@@ -65,11 +72,13 @@ if args.datatype in [np.float32, np.float64]:
 elif args.datatype in [np.float16]:
     cost = GeneralizedCost(costfunc=CrossEntropyMulti(scale=cost_scale))
 
-mlp = Model(layers=layers)
+model = Model(layers=layers)
 
 # configure callbacks
-callbacks = Callbacks(mlp, eval_set=test, **args.callback_args)
+callbacks = Callbacks(model, eval_set=test, **args.callback_args)
 
-mlp.fit(train, optimizer=opt_gdm, num_epochs=num_epochs, cost=cost, callbacks=callbacks)
+model.fit(train, optimizer=opt_gdm, num_epochs=num_epochs,
+          cost=cost, callbacks=callbacks)
 
-print 'Misclassification error = %.1f%%' % (mlp.eval(test, metric=Misclassification())*100)
+error_rate = model.eval(test, metric=Misclassification())
+neon_logger.display('Misclassification error = %.1f%%' % (error_rate * 100))

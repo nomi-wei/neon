@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ----------------------------------------------------------------------------
-'''
+"""
 Command line argument parser for neon deep learning library
 
 This is a wrapper around the configargparse ArgumentParser class.
@@ -20,8 +20,7 @@ It adds in the default neon command line arguments and allows
 additional arguments to be added using the argparse library
 methods.  Lower priority defaults can also be read from a configuration file
 (specified by the -c command line argument).
-'''
-
+"""
 import configargparse
 import logging
 from logging.handlers import RotatingFileHandler
@@ -31,6 +30,7 @@ import inspect
 
 from neon import __version__ as neon_version
 from neon.backends import gen_backend
+from neon.backends.backend import Backend
 from neon.backends.util.check_gpu import get_compute_capability, get_device_count
 from neon.callbacks.callbacks import Callbacks
 
@@ -44,12 +44,13 @@ def extract_valid_args(args, func, startidx=0):
     Arguments:
         args (Namespace): a namespace of args from argparse
         func (Function): a function to inspect, to determine valid args
+        startidx (int): Start index
 
     Returns:
         dict of (arg, value) pairs from args that are valid for func
     """
     func_args = inspect.getargspec(func).args[startidx:]
-    return dict((k, v) for k, v in vars(args).items() if k in func_args)
+    return dict((k, v) for k, v in list(vars(args).items()) if k in func_args)
 
 
 class NeonArgparser(configargparse.ArgumentParser):
@@ -59,8 +60,9 @@ class NeonArgparser(configargparse.ArgumentParser):
     options to configure the logging module.
 
     Arguments:
-        desc (String) : Docstring from the calling function.
-        This will be used for the description of the command receiving the arguments.
+        desc (String) : Docstring from the calling function. This will be used
+                        for the description of the command receiving the
+                        arguments.
     """
     def __init__(self, *args, **kwargs):
         self._PARSED = False
@@ -134,10 +136,9 @@ class NeonArgparser(configargparse.ArgumentParser):
                             help='number of checkpoint files to retain')
 
         be_grp = self.add_argument_group('backend')
-        be_grp.add_argument('-b', '--backend', choices=['cpu', 'gpu', 'mgpu', 'argon'],
-                            default=self.defaults.get('backend',
-                                                      'gpu' if get_compute_capability() >= 3.0
-                                                      else 'cpu'),
+        be_grp.add_argument('-b', '--backend', choices=Backend.backend_choices(),
+                            default='gpu' if get_compute_capability() >= 3.0
+                                    else 'cpu',
                             help='backend type. Multi-GPU support is a premium '
                                  'feature available exclusively through the '
                                  'Nervana cloud. Please contact '
@@ -177,21 +178,25 @@ class NeonArgparser(configargparse.ArgumentParser):
         return
 
     def add_yaml_arg(self):
-        '''
+        """
         Add the yaml file argument, this is needed for scripts that
         parse the model config from yaml files
 
-        '''
+        """
         # yaml configuration file
         self.add_argument('yaml_file',
                           type=configargparse.FileType('r'),
                           help='neon model specification file')
 
     def add_argument(self, *args, **kwargs):
-        '''
+        """
         Method by which command line arguments are added to the parser.  Passed
         straight through to parent add_argument method.
-        '''
+
+        Arguments:
+            *args:
+            **kwargs:
+        """
         if self._PARSED:
             logger.warn('Adding arguments after arguments were parsed = '
                         'may need to rerun parse_args')
@@ -204,15 +209,17 @@ class NeonArgparser(configargparse.ArgumentParser):
     # we never use this alias from ConfigArgParse, but defining this here
     # prevents documentation indent warnings
     def add(self):
+        """ Ignored. """
         pass
 
     # we never use this alias from ConfigArgParse, but defining this here
     # prevents documentation indent warnings
     def add_arg(self):
+        """ Ignored. """
         pass
 
     def parse_args(self, gen_be=True):
-        '''
+        """
         Parse the command line arguments and setup neon
         runtime environment accordingly
 
@@ -222,14 +229,15 @@ class NeonArgparser(configargparse.ArgumentParser):
 
         Returns:
             namespace: contains the parsed arguments as attributes
-        '''
+
+        """
         args = super(NeonArgparser, self).parse_args()
         err_msg = None  # used for relaying exception to logger
 
         # set up the logging
         # max thresh is 50 (critical only), min is 10 (debug or higher)
         try:
-            log_thresh = max(10, 40 - args.verbose*10)
+            log_thresh = max(10, 40 - args.verbose * 10)
         except (AttributeError, TypeError):
             # if defaults are not set or not -v given
             # for latter will get type error

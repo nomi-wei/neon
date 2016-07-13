@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,40 +14,44 @@
 # limitations under the License.
 # ----------------------------------------------------------------------------
 """
-Example that trains on Facebook Q&A dataset: bAbI
+Example that trains on the Facebook Q&A dataset: bAbI.
 
-Task Number                  | FB LSTM Baseline | Neon QA GRU
----                          | ---              | ---
-QA1 - Single Supporting Fact | 50               |  47.9
-QA2 - Two Supporting Facts   | 20               |  29.8
-QA3 - Three Supporting Facts | 20               |  20.0
-QA4 - Two Arg. Relations     | 61               |  69.8
-QA5 - Three Arg. Relations   | 70               |  56.4
-QA6 - Yes/No Questions       | 48               |  49.1
-QA7 - Counting               | 49               |  76.5
-QA8 - Lists/Sets             | 45               |  68.9
-QA9 - Simple Negation        | 64               |  62.8
-QA10 - Indefinite Knowledge  | 44               |  45.3
-QA11 - Basic Coreference     | 72               |  67.6
-QA12 - Conjunction           | 74               |  63.9
-QA13 - Compound Coreference  | 94               |  91.9
-QA14 - Time Reasoning        | 27               |  36.8
-QA15 - Basic Deduction       | 21               |  51.4
-QA16 - Basic Induction       | 23               |  50.1
-QA17 - Positional Reasoning  | 51               |  49.0
-QA18 - Size Reasoning        | 52               |  90.5
-QA19 - Path Finding          | 8                |   9.0
-QA20 - Agent's Motivations   | 91               |  95.6
+Task Number                | FB LSTM Baseline | Neon QA GRU
+---                        | ---              | ---
+1 - Single Supporting Fact | 50               |  47.9
+2 - Two Supporting Facts   | 20               |  29.8
+3 - Three Supporting Facts | 20               |  20.0
+4 - Two Arg. Relations     | 61               |  69.8
+5 - Three Arg. Relations   | 70               |  56.4
+6 - Yes/No Questions       | 48               |  49.1
+7 - Counting               | 49               |  76.5
+8 - Lists/Sets             | 45               |  68.9
+9 - Simple Negation        | 64               |  62.8
+10 - Indefinite Knowledge  | 44               |  45.3
+11 - Basic Coreference     | 72               |  67.6
+12 - Conjunction           | 74               |  63.9
+13 - Compound Coreference  | 94               |  91.9
+14 - Time Reasoning        | 27               |  36.8
+15 - Basic Deduction       | 21               |  51.4
+16 - Basic Induction       | 23               |  50.1
+17 - Positional Reasoning  | 51               |  49.0
+18 - Size Reasoning        | 52               |  90.5
+19 - Path Finding          | 8                |   9.0
+20 - Agent's Motivations   | 91               |  95.6
 
 Reference:
     "Towards AI-Complete Question Answering: A Set of Prerequisite Toy Tasks"
     http://arxiv.org/abs/1502.05698
 
 Usage:
+
+    python examples/babi/train.py -e 20 --rlayer_type gru --save_path babi.p -t 1
+
     use -t to specify which bAbI task to run
-    python examples/babi/train.py -e 20 --rlayer_type gru --save_path babi_lstm.p -t 1
 """
+
 from util import create_model, babi_handler
+from neon import logger as neon_logger
 from neon.backends import gen_backend
 from neon.data import QA
 from neon.layers import GeneralizedCost
@@ -58,7 +62,7 @@ from neon.util.argparser import NeonArgparser, extract_valid_args
 
 # parse the command line arguments
 parser = NeonArgparser(__doc__)
-parser.add_argument('-t', '--task', type=int, default='1', choices=xrange(1, 21),
+parser.add_argument('-t', '--task', type=int, default='1', choices=range(1, 21),
                     help='the task ID to train/test on from bAbI dataset (1-20)')
 parser.add_argument('--rlayer_type', default='gru', choices=['gru', 'lstm'],
                     help='type of recurrent layer to use (gru or lstm)')
@@ -94,5 +98,7 @@ model.fit(train_set,
           callbacks=callbacks)
 
 # output accuracies
-print('Train Accuracy = %.1f%%' % (model.eval(train_set, metric=Accuracy())*100))
-print('Test Accuracy = %.1f%%' % (model.eval(valid_set, metric=Accuracy())*100))
+neon_logger.display('Train Accuracy = %.1f%%' %
+                    (model.eval(train_set, metric=Accuracy()) * 100))
+neon_logger.display('Test Accuracy = %.1f%%' %
+                    (model.eval(valid_set, metric=Accuracy()) * 100))

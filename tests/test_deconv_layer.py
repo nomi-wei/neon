@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ----------------------------------------------------------------------------
-
 import itertools as itt
 import numpy as np
-
+import pytest
 from neon import NervanaObject
+from neon.backends.nervanagpu import NervanaGPU
 from neon.layers import Deconvolution
 from neon.initializers import Uniform
 
@@ -61,7 +61,7 @@ def pytest_generate_tests(metafunc):
             nifm_rng = [8, 16]
             fs_rng = [3]
             nofm_rng = [4]
-            rng_max_rng = [eps, eps*10, 1.0, 1e6, 1e10]
+            rng_max_rng = [eps, eps * 10, 1.0, 1e6, 1e10]
             wrng = [[0.0, 1.0], [-1.0, 0.0], [-1.0, 1.0]]
         else:
             indim_rng = [16]
@@ -111,6 +111,9 @@ def test_dconv_zeros(backend_default, zeros_convargs):
 
 def test_dconv_ones(backend_default, ones_convargs):
     indim, nifm, fshape, nofm, batch_size = ones_convargs
+    if isinstance(NervanaObject.be, NervanaGPU) and NervanaObject.be.compute_capability < (5, 0):
+        if nofm % 4 != 0:
+            pytest.skip(msg="C dim must be a multiple of 4 for Kepler bprop kernel")
     NervanaObject.be.bsz = batch_size
     dtypeu = np.float32
 
@@ -164,6 +167,9 @@ def test_dconv_ones(backend_default, ones_convargs):
 
 def test_dconv_rand(backend_default, rand_convargs):
     indim, nifm, fshape, nofm, batch_size, rngmax, w_rng = rand_convargs
+    if isinstance(NervanaObject.be, NervanaGPU) and NervanaObject.be.compute_capability < (5, 0):
+        if nofm % 4 != 0:
+            pytest.skip(msg="C dim must be a multiple of 4 for Kepler bprop kernel")
     NervanaObject.be.bsz = batch_size
     dtypeu = np.float32
     inp_rng = [0.0, rngmax]
@@ -258,7 +264,7 @@ class DeconvRefLayer(object):
         self.z = np.zeros((mbs, self.nout), dtype=dtypeu)
         self.y = np.zeros((mbs, self.nout), dtype=dtypeu)
         ofmstarts = np.array(
-            range(0, (self.ofmsize * self.nofm), self.ofmsize))
+            list(range(0, (self.ofmsize * self.nofm), self.ofmsize)))
         self.ofmlocs = np.zeros((self.ofmsize, self.nofm), dtype='i32')
         for dst in range(self.ofmsize):
             self.ofmlocs[dst, :] = ofmstarts + dst

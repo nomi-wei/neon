@@ -14,7 +14,8 @@
 # limitations under the License.
 
 [-
-our ($type, $determ);
+our ($type, $D);
+our $determ = $D;
 our $convert_in   = $type eq 'h' ? 'F2F.F32.F16' :    '';
 our $convert_out  = $type eq 'h' ? 'F2F.F16.F32' :    '';
 our $dtype_shift  = $type eq 'h' ?           '1' :   '2';
@@ -27,11 +28,11 @@ sub output_op   { return $determ ? 'STG.E.CG' : 'RED.E.ADD.F32.FTZ.RN'; }
 
 <CONSTANT_MAPPING>
 
-    addr_zero   : 4x<32*36*2*4>
-    addr_rYXN   : 4x<32*36*2*4 + 4>
-    addr_iYXN   : 4x<32*36*2*4 + 5>
-    addr_idx_K  : 4x<32*36*2*4 + 6>
-    addr_idx_C  : 4x<32*36*2*4 + 7>
+    addr_zero   : 4x<32*36*2*4 + 64 + 0>
+    addr_rYXN   : 4x<32*36*2*4 + 64 + 4>
+    addr_iYXN   : 4x<32*36*2*4 + 64 + 5>
+    addr_idx_K  : 4x<32*36*2*4 + 64 + 6>
+    addr_idx_C  : 4x<32*36*2*4 + 64 + 7>
 
     param_F[0]         : c[0x0][0x140]
     param_F[1]         : c[0x0][0x144]
@@ -110,14 +111,14 @@ sub output_op   { return $determ ? 'STG.E.CG' : 'RED.E.ADD.F32.FTZ.RN'; }
       92-95 ~ reduce_YXN, swapBuf, readFs, readIs
 
 
-      64-89 ~ tid_128, tid_32, tid_31, tid_16, Tid_1, idxC, idxK, idxI, readFs2, readIs2, offsetF, k, CRSK, xmad_determ
+      64-89 ~ tid_128, tid_64, tid_32, tid_31, tid_16, Tid_1, idxC, idxK, idxI, readFs2, readIs2, offsetF, k, CRSK, xmad_determ
       86-89 : Out1<0-1>, Out2<0-1>
       90-91 : Out0<0-1>
       92-95 ~ alpha, writeCs, readCs, c
 
       64-79 : shuffle_x<0-7>y0, shuffle_x<0-7>y1
 
-      84-85 : t<0-1>
+      84-85 ~ t<0-1>
 
        3, 2,11,19,10,18 : m<0-5>0
        1, 9, 0, 8,17,16 : m<0-5>1
@@ -126,16 +127,16 @@ sub output_op   { return $determ ? 'STG.E.CG' : 'RED.E.ADD.F32.FTZ.RN'; }
       72,73,74,75,76,77 : m<0-5>4
       78,79,80,81,82,83 : m<0-5>5
 
-       3,11,10 : w00, w20, w10
-       1, 0,17 : w01, w21, w11
-      27,26,24 : w02, w22, w12
-      66,67,69 : w03, w23, w13
-      72,73,75 : w04, w24, w14
-      78,79,81 : w05, w25, w15
+       3, 2,11 : w00, w10, w20
+       1, 9, 0 : w01, w11, w21
+      27,26,25 : w02, w12, w22
+      66,67,68 : w03, w13, w23
+      72,73,74 : w04, w14, w24
+      78,79,80 : w05, w15, w25
 
-       3, 2,10 : s00, s20, s10
-       1, 0, 8 : s02, s22, s12
-      66,67,69 : s01, s21, s11
+      19,10,18,69,70,71 ~ s00, s10, s20
+       8,17,16,75,76,77 ~ s02, s12, s22
+      24,64,65,81,82,83 ~ s01, s11, s21
 
 </REGISTER_MAPPING>
 
@@ -664,16 +665,18 @@ LOAD_LOOP:
 01:-:-:-:1      LOP.AND  Tid32_2,  Tid,    -32;
 --:-:-:-:1      SHR.U32  Tid32_2,  Tid32_2, 2;
 
-// readFs = ((tid & -32) >> 2) | ((tid >> 1) & 7)
---:-:-:-:1      BFE.U32 readFs, Tid,    0x301; // 3 bits at position 1
---:-:-:-:1      LOP.OR  readFs, readFs, Tid32_2;
---:-:-:-:1      SHL     readFs, readFs, 4;
-
 // readIs = ((tid & 16) >> 3) | (tid & 1)
 --:-:-:-:1      LOP.AND Tid1,   Tid,    1;
---:-:-:-:1      LOP.AND readIs, Tid,    16;
+01:-:-:-:1      LOP.AND readIs, Tid,    16;
 --:-:-:-:1      SHR.U32 readIs, readIs, 3;
 --:-:-:-:1      IADD    readIs, readIs, Tid1;
+
+// readFs = ((tid & -32) >> 2) | ((tid >> 1) & 7) | (readIs << 2)
+--:-:-:-:1      BFE.U32 readFs, Tid,    0x301; // 3 bits at position 1
+--:-:-:-:1      LOP.OR  readFs, readFs, Tid32_2;
+--:-:-:-:1      ISCADD  readFs, readIs, readFs, 2;
+
+--:-:-:-:1      SHL     readFs, readFs, 4;
 --:-:-:-:1      SHL     readIs, readIs, 3;
 
 // writeCs = readIs * 32*36 + readFs;
@@ -744,19 +747,20 @@ COMPUTE_FINISH:
 
 --:-:-:-:1      ISETP.GE.AND P4, PT, tid_128, 256, PT;
 
-
-// readFs = ((tid & -16) >> 1) | ((tid >> 1) & 3)
---:-:-:-:1      LOP.AND  tid_16,   tid_128, -16;
---:-:-:-:1      SHR.U32  tid_16,   tid_16,   1;
---:-:-:-:1      BFE.U32  readFs2,  tid_128,  0x201; // 2 bits at position 1
---:-:-:-:1      LOP.OR   readFs2,  readFs2,  tid_16;
---:-:-:-:1      ISCADD   readFs2,  readFs2,  4x<32*4>, 4;
-
 // readIs = ((tid &  8) >> 2) | (tid & 1)
 --:-:-:-:1      LOP.AND  Tid_1,   tid_128, 1;
 --:-:-:-:1      LOP.AND  readIs2, tid_128, 8;
 --:-:-:-:1      SHR.U32  readIs2, readIs2, 2;
 --:-:-:-:1      IADD     readIs2, readIs2, Tid_1;
+
+// readFs = ((tid & -16) >> 1) | ((tid >> 1) & 3) | (readIs2 << 2)
+--:-:-:-:1      LOP.AND  tid_16,   tid_128, -16;
+--:-:-:-:1      SHR.U32  tid_16,   tid_16,   1;
+--:-:-:-:1      BFE.U32  readFs2,  tid_128,  0x201; // 2 bits at position 1
+--:-:-:-:1      LOP.OR   readFs2,  readFs2,  tid_16;
+--:-:-:-:1      ISCADD   readFs2,  readIs2, readFs2, 2;
+
+--:-:-:-:1      ISCADD   readFs2, readFs2,  4x<32*4>, 4;
 --:-:-:-:1      SHL      readIs2, readIs2, 3;
 
 // writeCs = readFs * 32*36 + readIs;
@@ -773,14 +777,16 @@ COMPUTE_FINISH:
 
 --:-:-:-:1      LOP.AND tid_31, tid_128, 31;
 --:-:-:-:1      SHR.U32 tid_32, tid_128,  5;
+--:-:-:-:1      SHR.U32 tid_64, tid_128,  6;
 
-// readCs = tid>>5 * 32*36 + tid & 31
---:-:-:-:1      XMAD readCs, tid_32, 1x<32*36>, tid_31;
---:-:-:-:1      SHL  readCs, readCs, 2;
+// readCs = tid_32 * 32*36 + tid_31 + tid_64 * 16
+--:-:-:-:1      XMAD   readCs, tid_32, 1x<32*36>, tid_31;
+--:-:-:-:1      ISCADD readCs, tid_64, readCs, 4;
+--:-:-:-:1      SHL    readCs, readCs, 2;
 
 // k = K_blk*32 + tid_31
 // c = C_blk*32 + tid_32<<1
---:-:-:-:1      SHL tid_32, tid_32,   1;
+--:-:-:-:1      SHL tid_32, tid_32, 1;
 01:-:-:-:1      ISCADD  k, idxK, tid_31, 5;
 02:-:-:-:1      ISCADD  c, idxC, tid_32, 5;
 
@@ -969,14 +975,15 @@ OUTPUT_TRANSFORM:
         my $w = sprintf "%02x", 1 << $i;
         $out .= qq{
 $w:-:-:-:1      FADD t0,   m1$i,  m2$i;
---:-:-:-:1      FADD t1,   m3$i,  m4$i;
---:-:-:-:1      FADD w1$i, m3$i, -m4$i;
---:-:-:-:1      FFMA w1$i, w1$i,  2.0, m1$i;
---:-:-:-:1      FADD w1$i, w1$i, -m2$i;
+$w:-:-:-:1      FADD t1,   m3$i,  m4$i;
+--:-:-:-:1      FADD m1$i, m1$i, -m2$i;
+--:-:-:-:1      FADD m3$i, m3$i, -m4$i;
 --:-:-:-:1      FADD w0$i, m0$i,  t0;
 --:-:-:-:1      FADD w0$i, w0$i,  t1;
---:-:-:-:1      FFMA w2$i, t1,    4.0, t0;
---:-:-:-:1      FADD w2$i, w2$i,  m5$i;
+--:-:-:-:1      FMUL w1$i, m1$i,  0.625;
+--:-:-:-:1      FFMA w1$i, m3$i,  1.5,      w1$i;
+--:-:-:-:1      FFMA w2$i, t1,    2.25,     m5$i;
+--:-:-:-:1      FFMA w2$i, t0,    0.390625, w2$i;
         };
     }
     return $out;
@@ -991,13 +998,14 @@ $w:-:-:-:1      FADD t0,   m1$i,  m2$i;
         $out .= qq{
 --:-:-:-:1      FADD t0,     w${i}1,  w${i}2;
 --:-:-:-:1      FADD t1,     w${i}3,  w${i}4;
---:-:-:-:1      FADD s${i}1, w${i}3, -w${i}4;
---:-:-:-:1      FFMA s${i}1, s${i}1,  2.0, w${i}1;
---:-:-:-:1      FADD s${i}1, s${i}1, -w${i}2;
+--:-:-:-:1      FADD w${i}1, w${i}1, -w${i}2;
+--:-:-:-:1      FADD w${i}3, w${i}3, -w${i}4;
 --:-:-:-:1      FADD s${i}0, w${i}0,  t0;
 --:-:-:-:1      FADD s${i}0, s${i}0,  t1;
---:-:-:-:1      FFMA s${i}2, t1,      4.0, t0;
---:-:-:-:1      FADD s${i}2, s${i}2,  w${i}5;
+--:-:-:-:1      FMUL s${i}1, w${i}1,  0.625;
+--:-:-:-:1      FFMA s${i}1, w${i}3,  1.5,      s${i}1;
+--:-:-:-:1      FFMA s${i}2, t1,      2.25,     w${i}5;
+--:-:-:-:1      FFMA s${i}2, t0,      0.390625, s${i}2;
         };
     }
     return $out;

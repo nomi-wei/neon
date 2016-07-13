@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2014 Nervana Systems Inc.
+# Copyright 2014-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ----------------------------------------------------------------------------
+
+from builtins import str, zip
 import numpy as np
 import itertools as itt
 from operator import add
@@ -19,6 +21,7 @@ from operator import add
 from neon import NervanaObject
 from neon.layers.layer import Layer, BranchNode, Dropout, DataTransform
 from neon.util.persist import load_class
+from functools import reduce
 
 
 def flatten(item):
@@ -33,7 +36,7 @@ def flatten(item):
 class LayerContainer(Layer):
     """
     Layer containers are a generic class that are used to encapsulate groups of layers and
-    provide methods for propagating through the constituent layers, allocating memory
+    provide methods for propagating through the constituent layers, allocating memory.
     """
     @property
     def layers_to_optimize(self):
@@ -48,9 +51,18 @@ class LayerContainer(Layer):
         return lto
 
     def nested_str(self, level=0):
-        padstr = '\n' + '  '*level
+        """
+        Utility function for displaying layer info with a given indentation level.
+
+        Arguments:
+            level (int, optional): indentation level
+
+        Returns:
+            str: layer info at the given indentation level
+        """
+        padstr = '\n' + '  ' * level
         ss = '  ' * level + self.classnm + padstr
-        ss += padstr.join([l.nested_str(level+1) for l in self.layers])
+        ss += padstr.join([l.nested_str(level + 1) for l in self.layers])
         return ss
 
     @classmethod
@@ -69,6 +81,16 @@ class LayerContainer(Layer):
         return new_cls
 
     def get_description(self, get_weights=False, keep_states=False):
+        """
+        Get layer parameters. All parameters are needed for optimization, but
+        only weights are serialized.
+
+        Arguments:
+            get_weights (bool, optional): Control whether all parameters are returned or
+                                          just weights for serialization.
+            keep_states (bool, optional): Control whether all parameters are returned
+                                          or just weights for serialization.
+        """
         desc = super(LayerContainer, self).get_description(skip=['layers'])
         desc['container'] = True
         desc['config']['layers'] = []
@@ -79,6 +101,16 @@ class LayerContainer(Layer):
         return desc
 
     def load_weights(self, pdict, load_states=True):
+        """
+        Load weights.
+
+        Arguments:
+            pdict:
+            load_states:  (Default value = True)
+
+        Returns:
+
+        """
         assert len(pdict['config']['layers']) == len(self.layers)
         for branch, bdict in zip(self.layers, pdict['config']['layers']):
             branch.load_weights(bdict, load_states=load_states)
@@ -99,10 +131,22 @@ class LayerContainer(Layer):
                 p = l.parallelism
 
     def set_batch_size(self, N):
+        """
+        Set minibatch size.
+
+        Arguments:
+            N (int): minibatch size
+        """
         for l in self.layers:
             l.set_batch_size(N)
 
     def set_seq_len(self, S):
+        """
+        Set sequence length.
+
+        Arguments:
+            S (int): sequence length
+        """
         for l in self.layers:
             l.set_seq_len(S)
 
@@ -119,7 +163,7 @@ class Sequential(LayerContainer):
         super(Sequential, self).__init__(name)
 
         self.layers = [l for l in flatten(layers)]
-        self._layers = filter(lambda x: type(x) not in (BranchNode,), self.layers)
+        self._layers = [x for x in self.layers if type(x) not in (BranchNode,)]
         root = self._layers[0]
         assert (root.owns_output or
                 type(root) in [Dropout, DataTransform]), "Sequential root must own outputs"
@@ -146,6 +190,13 @@ class Sequential(LayerContainer):
         return self
 
     def allocate(self, shared_outputs=None):
+        """
+        Allocate output buffer to store activations from fprop.
+
+        Arguments:
+            shared_outputs (Tensor, optional): pre-allocated tensor for activations to be
+                                               computed into
+        """
         # get the layers that own their outputs
         alloc_layers = [l for l in self.layers if l.owns_output]
         alloc_layers[-1].allocate(shared_outputs)
@@ -178,6 +229,14 @@ class Sequential(LayerContainer):
     def fprop(self, inputs, inference=False, beta=0.0):
         """
         TODO:  Handle final layers that don't own their own outputs (bias, activation)
+
+        Arguments:
+            inputs:
+            inference:  (Default value = False)
+            beta:  (Default value = 0.0)
+
+        Returns:
+
         """
         x = inputs
 
@@ -196,6 +255,19 @@ class Sequential(LayerContainer):
         return x
 
     def bprop(self, error, alpha=1.0, beta=0.0):
+        """
+        Apply the backward pass transformation to the input data.
+
+        Arguments:
+            error (Tensor): deltas back propagated from the adjacent higher layer
+            alpha (float, optional): scale to apply to input for activation
+                                     gradient bprop.  Defaults to 1.0
+            beta (float, optional): scale to apply to output activation
+                                    gradient bprop.  Defaults to 0.0
+
+        Returns:
+            Tensor: deltas to propagate to the adjacent lower layer
+        """
         for l in reversed(self._layers):
             altered_tensor = l.be.distribute_data(error, l.parallelism)
             if altered_tensor:
@@ -211,6 +283,9 @@ class Sequential(LayerContainer):
         return self._layers[0].deltas
 
     def get_terminal(self):
+        """
+        Used for recursively getting final nodes from layer containers.
+        """
         terminal = self.layers[-1].get_terminal()
         return terminal
 
@@ -257,11 +332,31 @@ class Tree(LayerContainer):
         self.betas.reverse()
 
     def nested_str(self, level=0):
+        """
+        Utility function for displaying layer info with a given indentation level.
+
+        Arguments:
+            level (int, optional): indentation level
+
+        Returns:
+            str: layer info at the given indentation level
+        """
         ss = self.classnm + '\n'
-        ss += '\n'.join([l.nested_str(level+1) for l in self.layers])
+        ss += '\n'.join([l.nested_str(level + 1) for l in self.layers])
         return ss
 
     def configure(self, in_obj):
+        """
+        Set shape based parameters of this layer given an input tuple, int
+        or input layer.
+
+        Arguments:
+            in_obj (int, tuple, Layer, Tensor or dataset): object that provides shape
+                                                           information for layer
+
+        Returns:
+            (tuple): shape of output data
+        """
         super(Tree, self).configure(in_obj)
         self.layers[0].configure(in_obj)
 
@@ -271,6 +366,13 @@ class Tree(LayerContainer):
         return self
 
     def allocate(self, shared_outputs=None):
+        """
+        Allocate output buffer to store activations from fprop.
+
+        Arguments:
+            shared_outputs (Tensor, optional): pre-allocated tensor for activations to be
+                                               computed into
+        """
         for l in self.layers:
             l.allocate()
         self.outputs = [l.outputs for l in self.layers]
@@ -280,15 +382,36 @@ class Tree(LayerContainer):
             l.allocate_deltas()
 
     def fprop(self, inputs, inference=False):
+        """
+        Apply the forward pass transformation to the input data.
+
+        Arguments:
+            inputs (Tensor): input data
+
+        Returns:
+            Tensor: output data
+        """
         x = self.layers[0].fprop(inputs, inference)
         out = [x] + [l.fprop(None) for l in self.layers[1:]]
         return out
 
     def bprop(self, error):
-        for l, e, a, b in reversed(zip(self.layers, error, self.alphas, self.betas)):
+        """
+        Apply the backward pass transformation to the input data.
+
+        Arguments:
+            error (Tensor): deltas back propagated from the adjacent higher layer
+
+        Returns:
+            Tensor: deltas to propagate to the adjacent lower layer
+        """
+        for l, e, a, b in reversed(list(zip(self.layers, error, self.alphas, self.betas))):
             l.bprop(e, alpha=a, beta=b)
 
     def get_terminal(self):
+        """
+        Used for recursively getting final nodes from layer containers.
+        """
         return [l.get_terminal() for l in self.layers]
 
 
@@ -299,6 +422,15 @@ class SingleOutputTree(Tree):
     inference.
     """
     def fprop(self, inputs, inference=False):
+        """
+        Apply the forward pass transformation to the input data.
+
+        Arguments:
+            inputs (Tensor): input data
+
+        Returns:
+            Tensor: output data
+        """
         x = self.layers[0].fprop(inputs, inference)
         if inference:
             return x
@@ -308,6 +440,9 @@ class SingleOutputTree(Tree):
 
 
 class Broadcast(LayerContainer):
+    """
+    Parent class for MergeSum and MergeBroadcast.
+    """
     def __init__(self, layers, name=None):
         super(Broadcast, self).__init__(name)
         # Input list of layers converts:
@@ -334,7 +469,7 @@ class Broadcast(LayerContainer):
 
     def configure(self, in_obj):
         """
-        sets shape based parameters of this layer given an input tuple or int
+        Sets shape based parameters of this layer given an input tuple or int
         or input layer
 
         Arguments:
@@ -353,6 +488,15 @@ class Broadcast(LayerContainer):
         return self
 
     def set_deltas(self, delta_buffers):
+        """
+        Use pre-allocated (by layer containers) list of buffers for backpropagated error.
+        Only set deltas for layers that own their own deltas
+        Only allocate space if layer owns its own deltas (e.g., bias and activation work in-place,
+        so do not own their deltas).
+
+        Arguments:
+            delta_buffers (list): list of pre-allocated tensors (provided by layer container)
+        """
         assert len(delta_buffers) == 4, "Need extra delta buffer pool for broadcast layers"
         for l in self.layers:
             l.allocate_deltas(delta_buffers[1:3])
@@ -368,13 +512,25 @@ class Broadcast(LayerContainer):
             delta_buffers.reverse()
 
     def get_terminal(self):
+        """
+        Used for recursively getting final nodes from layer containers.
+        """
         terminals = [l.get_terminal() for l in self.layers]
         return terminals
 
 
 class MergeSum(Broadcast):
+    """
+    """
 
     def allocate(self, shared_outputs=None):
+        """
+        Allocate output buffer to store activations from fprop.
+
+        Arguments:
+            shared_outputs (Tensor, optional): pre-allocated tensor for activations to be
+                                               computed into
+        """
         if self.outputs is None:
             self.outputs = self.be.iobuf(self.out_shape, shared=shared_outputs,
                                          parallelism=self.parallelism)
@@ -389,12 +545,34 @@ class MergeSum(Broadcast):
         self.out_shape = out_shapes[0]
 
     def fprop(self, inputs, inference=False):
+        """
+        Apply the forward pass transformation to the input data.
+
+        Arguments:
+            inputs (Tensor): input data
+
+        Returns:
+            Tensor: output data
+        """
         for l in self.layers:
             beta = 0 if l is self.layers[0] else 1
             l.fprop(inputs, inference, beta=beta)
         return self.outputs
 
     def bprop(self, error, alpha=1.0, beta=0.0):
+        """
+        Apply the backward pass transformation to the input data.
+
+        Arguments:
+            error (Tensor): deltas back propagated from the adjacent higher layer
+            alpha (float, optional): scale to apply to input for activation
+                                     gradient bprop.  Defaults to 1.0
+            beta (float, optional): scale to apply to output activation
+                                    gradient bprop.  Defaults to 0.0
+
+        Returns:
+            Tensor: deltas to propagate to the adjacent lower layer
+        """
         for l in reversed(self.layers):
             b = beta if l is self.layers[-1] else 1
             l.bprop(error, alpha=alpha, beta=b)
@@ -404,21 +582,36 @@ class MergeSum(Broadcast):
 class MergeBroadcast(Broadcast):
     """
     Branches a single incoming layer or object (broadcast) into multiple output paths that are
-    then combined again (merged)
+    then combined again (merged). This container supports several options for concatenating the
+    paths ("recurrent", "depth", and "stack").
+
+    "recurrent" is used when merging two recurrent output streams.
+
+    "depth" concatenates activations that have a notion of spatial dimension. Multiple
+    activations can be concatenated along the feature map dimension, but the feature map
+    shapes have to be the same.
+
+    "stack" ignores the feature map shape and simply stacks the non-batch dimensions
+    atop each other. Used to concatenate the output of fully connected layers with each
+    other, and fully connected layers with convolutional layers.
+
+    For example, suppose we are merging a conv layer with output shape (10, 5, 5)
+    and a fully connected layer with 100 output nodes. Using 'depth' is not allowable.
+    By using 'stack', the (10, 5, 5) output of the conv layer would just be interpreted as
+    250 output nodes that are stacked on top of the 100 nodes from the fully connected
+    layer to get a total merged output of 350 nodes.
 
     Arguments:
         layers (list(list(Layer), LayerContainer): list of either layer lists,
                                                    or layer containers.  Elements that are
                                                    lists will be wrapped in Sequential
                                                    containers
+        merge (string): the merging method. Must be 'recurrent', 'depth', or 'stack'
         alphas (list(float), optional):  list of alpha values by which to weight the
                                          backpropagated errors
         name (str): Container name.  Defaults to "MergeBroadcast"
     """
     def __init__(self, layers, merge, alphas=None, name=None):
-        """
-        TODO add DOCSTRING
-        """
         super(MergeBroadcast, self).__init__(layers, name)
 
         self.betas = [1.0 for _ in self.layers]
@@ -431,8 +624,15 @@ class MergeBroadcast(Broadcast):
 
     def get_partitions(self, x, slices):
         """
-        given a partitioning, slices, of an activation buffer, x, determine which axis to slice
-        along depending on whether x is a sequential tensor or not
+        Given a partitioning, slices, of an activation buffer, x, determine which axis to slice
+        along depending on whether x is a sequential tensor or not.
+
+        Arguments:
+            x:
+            slices:
+
+        Returns:
+
         """
         if x.shape[-1] != self.be.bsz:  # This is the sequential case
             return [x[:, sl] for sl in slices]
@@ -440,6 +640,13 @@ class MergeBroadcast(Broadcast):
             return [x[sl] for sl in slices]
 
     def allocate(self, shared_outputs=None):
+        """
+        Allocate output buffer to store activations from fprop.
+
+        Arguments:
+            shared_outputs (Tensor, optional): pre-allocated tensor for activations to be
+                                               computed into
+        """
         if self.outputs is None:
             self.outputs = self.be.iobuf(self.out_shape, shared=shared_outputs,
                                          parallelism=self.parallelism)
@@ -470,16 +677,39 @@ class MergeBroadcast(Broadcast):
         self.slices = [slice(s, e) for s, e in zip(start_idx, end_idx)]
 
     def fprop(self, inputs, inference=False):
+        """
+        Apply the forward pass transformation to the input data.
+
+        Arguments:
+            inputs (Tensor): input data
+
+        Returns:
+            Tensor: output data
+        """
         for l in self.layers:
             l.fprop(inputs, inference)
         return self.outputs
 
     def bprop(self, error, alpha=1.0, beta=0.0):
+        """
+        Apply the backward pass transformation to the input data.
+
+        Arguments:
+            error (Tensor): deltas back propagated from the adjacent higher layer
+            alpha (float, optional): scale to apply to input for activation
+                                     gradient bprop.  Defaults to 1.0
+            beta (float, optional): scale to apply to output activation
+                                    gradient bprop.  Defaults to 0.0
+
+        Returns:
+            Tensor: deltas to propagate to the adjacent lower layer
+        """
         self.betas[-1] = beta
         if self.error_views is None:
             self.error_views = self.get_partitions(error, self.slices)
-        for l, e, a, b in reversed(zip(self.layers, self.error_views, self.alphas, self.betas)):
-            l.bprop(e, alpha=a*alpha, beta=b)
+        for l, e, a, b in reversed(list(zip(self.layers, self.error_views, self.alphas,
+                                            self.betas))):
+            l.bprop(e, alpha=a * alpha, beta=b)
         return self.deltas
 
 
@@ -510,15 +740,46 @@ class MergeMultistream(MergeBroadcast):
         return self
 
     def set_deltas(self, delta_buffers):
+        """
+        Use pre-allocated (by layer containers) list of buffers for backpropagated error.
+        Only set deltas for layers that own their own deltas
+        Only allocate space if layer owns its own deltas (e.g., bias and activation work in-place,
+        so do not own their deltas).
+
+        Arguments:
+            delta_buffers (list): list of pre-allocated tensors (provided by layer container)
+        """
         for l in self.layers:
             l.allocate_deltas()
 
     def fprop(self, inputs, inference=False):
+        """
+        Apply the forward pass transformation to the input data.
+
+        Arguments:
+            inputs (Tensor): input data
+
+        Returns:
+            Tensor: output data
+        """
         for l, inp in zip(self.layers, inputs):
             l.fprop(inp, inference)
         return self.outputs
 
     def bprop(self, error, alpha=1.0, beta=0.0):
+        """
+        Apply the backward pass transformation to the input data.
+
+        Arguments:
+            error (Tensor): deltas back propagated from the adjacent higher layer
+            alpha (float, optional): scale to apply to input for activation
+                                     gradient bprop.  Defaults to 1.0
+            beta (float, optional): scale to apply to output activation
+                                    gradient bprop.  Defaults to 0.0
+
+        Returns:
+            Tensor: deltas to propagate to the adjacent lower layer
+        """
         if self.error_views is None:
             self.error_views = self.get_partitions(error, self.slices)
         for l, e in zip(self.layers, self.error_views):
@@ -564,6 +825,15 @@ class RoiPooling(Sequential):
         self.bprop_enabled = bprop_enabled
 
     def nested_str(self, level=0):
+        """
+        Utility function for displaying layer info with a given indentation level.
+
+        Arguments:
+            level (int, optional): indentation level
+
+        Returns:
+            str: layer info at the given indentation level
+        """
         ss = self.__class__.__name__ + '\n'
         return ss
 
@@ -572,6 +842,12 @@ class RoiPooling(Sequential):
         Must receive a list of shapes for configurations
         Need both the layer container and roi dataset to configure shapes
         'in_obj' will include be [image_shape, roi_shape] (e.g [(3, 600, 1000), 5])
+
+        Arguments:
+            in_obj:
+
+        Returns:
+
         """
         # configure to get the shape of feature map
         self.prev_layer = None
@@ -611,6 +887,13 @@ class RoiPooling(Sequential):
         return self
 
     def allocate(self, shared_outputs=None):
+        """
+        Allocate output buffer to store activations from fprop.
+
+        Arguments:
+            shared_outputs (Tensor, optional): pre-allocated tensor for activations to be
+                                               computed into
+        """
         super(RoiPooling, self).allocate(shared_outputs)
         self.owns_output = True
         self.error = self.be.iobuf(self.in_shape)
@@ -618,11 +901,26 @@ class RoiPooling(Sequential):
         self.max_idx = self.be.iobuf(self.out_shape, dtype=np.int32)
 
     def set_deltas(self, delta_buffers):
+        """
+        Use pre-allocated (by layer containers) list of buffers for backpropagated error.
+        Only set deltas for layers that own their own deltas
+        Only allocate space if layer owns its own deltas (e.g., bias and activation work in-place,
+        so do not own their deltas).
+
+        Arguments:
+            delta_buffers (list): list of pre-allocated tensors (provided by layer container)
+        """
         self.allocate_deltas()
 
     def init_buffers(self, inputs):
         """
         Initialize buffers for images and ROIs
+
+        Arguments:
+            inputs:
+
+        Returns:
+
         """
         assert len(inputs) == 2, "inputs must contain both images and ROIs"
         if self.img is None or self.img is not inputs[0]:
@@ -631,7 +929,15 @@ class RoiPooling(Sequential):
             assert self.rois.shape[1] == 5, "ROI entry must be 5-value tuple"
 
     def fprop(self, inputs, inference=False):
+        """
+        Apply the forward pass transformation to the input data.
 
+        Arguments:
+            inputs (Tensor): input data
+
+        Returns:
+            Tensor: output data
+        """
         self.init_buffers(inputs)
 
         self.outputs.fill(0)
@@ -648,6 +954,19 @@ class RoiPooling(Sequential):
         return self.outputs
 
     def bprop(self, error, alpha=1.0, beta=0.0):
+        """
+        Apply the backward pass transformation to the input data.
+
+        Arguments:
+            error (Tensor): deltas back propagated from the adjacent higher layer
+            alpha (float, optional): scale to apply to input for activation
+                                     gradient bprop.  Defaults to 1.0
+            beta (float, optional): scale to apply to output activation
+                                    gradient bprop.  Defaults to 0.0
+
+        Returns:
+            Tensor: deltas to propagate to the adjacent lower layer
+        """
 
         self.error.fill(0)
 
@@ -661,6 +980,9 @@ class RoiPooling(Sequential):
         self.deltas = super(RoiPooling, self).bprop(self.error, alpha, beta)
 
     def get_terminal(self):
+        """
+        Used for recursively getting final nodes from layer containers.
+        """
         terminals = [l.get_terminal() for l in self.layers]
         return terminals
 
@@ -696,6 +1018,12 @@ class Multicost(NervanaObject):
         return cls(**pdict)
 
     def initialize(self, in_obj):
+        """
+        Determine dimensions of cost and error buffers and allocate space from the input layer
+
+        Arguments:
+            in_obj (Layer): input layer from which to calculate costs
+        """
         assert hasattr(in_obj, 'layers'), "MultiCost must be passed a layer container"
         terminals = in_obj.get_terminal()
         for c, ll in zip(self.costs, terminals):
@@ -703,13 +1031,21 @@ class Multicost(NervanaObject):
 
     @property
     def cost(self):
+        """ Get cost. """
         return self.costs[0].cost
 
     @property
     def outputs(self):
+        """ Get outputs. """
         return self.costs[0].outputs
 
     def get_description(self, **kwargs):
+        """
+        Get layer parameters.
+
+        Arguments:
+            **kwargs: ignored
+        """
         desc = super(Multicost, self).get_description()
         costs = desc['config'].pop('costs')
         desc['config']['costs'] = []

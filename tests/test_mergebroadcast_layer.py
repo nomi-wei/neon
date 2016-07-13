@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -15,12 +15,14 @@
 """
 Convolution layer tests
 """
+from builtins import zip
 import numpy as np
-from neon import NervanaObject
+import pytest
+from neon import NervanaObject, logger as neon_logger
 from neon.layers import Sequential, Conv, Pooling, MergeBroadcast, Affine
 from neon.initializers.initializer import Gaussian, Constant
 from neon.transforms import Rectlin, Softmax
-from tests.utils import allclose_with_out
+from utils import allclose_with_out
 
 init1 = Gaussian(scale=0.01)
 relu = Rectlin()
@@ -99,14 +101,14 @@ def test_branch_model(backend_gpu):
     top = top_branch()
     neon_layer = Sequential(main1 + i1 + top)
 
-    inshape = (3, 224, 224)
+    inshape = (4, 224, 224)
     insize = np.prod(inshape)
     inpa = np.random.random((insize, batch_size))
     neon_layer.configure(inshape)
     inp = neon_layer.be.array(inpa)
 
     neon_layer.allocate()
-    print neon_layer.nested_str()
+    neon_logger.display(neon_layer.nested_str())
     neon_layer.layers[0].prev_layer = True
     neon_layer.allocate_deltas()
     neon_layer.layers[0].set_deltas([be.iobuf(inshape)])
@@ -161,7 +163,7 @@ def test_branch_model(backend_gpu):
     neon_out_ref = x.get()
     assert allclose_with_out(neon_out, neon_out_ref, rtol=0)
 
-    print "Beginning Back prop"
+    neon_logger.display("Beginning Back prop")
     erra = np.random.random(neon_out.shape)
     err = be.array(erra)
     for ll in reversed(neon_layer.layers[8:]):
@@ -185,6 +187,8 @@ def test_branch_model_fork(backend_gpu):
     from neon.layers import BranchNode, Tree
     np.random.seed(0)
     be = NervanaObject.be
+    if be.gpu_memory_size < 6.1 * 1024 * 1024 * 1024:
+        pytest.skip(msg='Test requires more than 6.1GB')
     be.bsz = 64
     bnode = BranchNode()
     i1 = inception([(32,), (32, 32), ('max', 16)])
@@ -196,14 +200,14 @@ def test_branch_model_fork(backend_gpu):
     alpha2 = 0.3
     neon_layer = Tree([p1, p2], alphas=[1.0, alpha2])
 
-    inshape = (3, 224, 224)
+    inshape = (4, 224, 224)
     insize = np.prod(inshape)
     inpa = np.random.random((insize, batch_size))
     neon_layer.configure(inshape)
     inp = neon_layer.be.array(inpa)
 
     neon_layer.allocate()
-    print neon_layer.nested_str()
+    neon_logger.display(neon_layer.nested_str())
     neon_layer.layers[0].layers[0].prev_layer = True
     neon_layer.allocate_deltas()
     neon_layer.layers[0].layers[0].set_deltas([be.iobuf(inshape)])
@@ -272,7 +276,7 @@ def test_branch_model_fork(backend_gpu):
     neon_out_ref2 = branch2.fprop(main2_out).get()
     assert allclose_with_out(neon_out_ref2, neon_out[1])
 
-    print "Beginning Back prop"
+    neon_logger.display("Beginning Back prop")
     erra = [np.random.random(d.shape) for d in neon_out]
     err = [be.array(d) for d in erra]
     neon_layer.layers[0].layers[0].deltas = be.iobuf(inshape)

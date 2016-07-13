@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2014 Nervana Systems Inc.
+# Copyright 2014-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -15,11 +15,10 @@
 """
 Defines basic input datatset types.
 """
-import logging
+from builtins import zip
 import numpy as np
 
-from neon import NervanaObject
-logger = logging.getLogger(__name__)
+from neon import NervanaObject, logger
 
 
 class NervanaDataIterator(NervanaObject):
@@ -32,43 +31,75 @@ class NervanaDataIterator(NervanaObject):
         super(NervanaDataIterator, self).__init__(name)
 
     def nbatches(self):
+        """
+        Return the number of minibatches in this dataset.
+        """
         raise NotImplemented()
 
     def reset(self):
+        """
+        Reset the starting index of this dataset back to zero.
+        """
         raise NotImplemented()
 
     def __iter__(self):
+        """
+        Define a generator that can be used to iterate over this dataset.
+        """
         raise NotImplemented()
 
 
 class ArrayIterator(NervanaDataIterator):
 
     """
-    This generic class defines an interface to iterate over minibatches of
-    data that has been preloaded into memory in the form of numpy arrays.
-    This may be used when the entire dataset is small enough to fit within memory.
+    The ArrayIterator class iterates over minibatches of data that
+    have been preloaded into memory in the form of numpy arrays. This may be used when
+    the entire dataset (e.g. CIFAR-10 or MNIST) is small enough to fit in memory. For example::
+
+        X = np.random.rand(10000, 3072)
+        y = np.random.randint(0, 10, 10000)
+        train = ArrayIterator(X=X, y=y, nclass=10, lshape=(3, 32, 32))
+
+    The above will create the ArrayIterator object. This object implements python's __iter__
+    method, and returns one minibatch of data, formatted as tuple of (input, label), with
+    each iteration. The minibatch size is controlled by the generated backend.
+
+    X should be an ndarray of shape (# example, # features). For images, the features should be
+    formatted in (channel, height, width) order. The `lshape` keyword indicates the local shape of
+    the images in (channel, height, width) format.
+
+    For classification tasks, the labels `y` should be integers from 0 to K-1, where K is the total
+    number of classes. When `y` is not provided, the input features themselves will be returned
+    as the target values (e.g. autoencoder).
+
+    In regression tasks, where `y` is not a categorical label, set `make_onehot` to `False`.
+    For example::
+
+        X = np.random.rand(1000, 1)
+        y = 2*X + 1
+        train = ArrayIterator(X=X, y=y, make_onehot=False)
+
+    For more information, see the Loading data section of the documentation.
     """
 
     def __init__(self, X, y=None, nclass=None, lshape=None, make_onehot=True, name=None):
         """
-        Implements loading of given data into backend tensor objects. If the
-        backend is specific to an accelarator device, the data is copied over
-        to that device.
+        During initialization, the input data will be converted to backend tensor objects
+        (e.g. CPUTensor or GPUTensor). If the backend uses the GPU, the data is copied over to the
+        device.
 
         Args:
-            X (ndarray, shape: [# examples, feature size]): Input features within the
+            X (ndarray, shape: [# examples, feature size]): Input features of the
                 dataset.
-            y (ndarray, shape:[# examples, 1], optional): Labels corresponding to the
-                input features.
-                If absent, the input features themselves will be returned as
-                target values (AutoEncoder)
-            nclass (int, optional): The number of possible types of labels.
-                (not necessary if not providing labels)
+            y (ndarray, shape:[# examples, 1 or feature size], optional): Labels corresponding to
+                the input features. If absent, the input features themselves will be returned as
+                target values (e.g. autoencoder)
+            nclass (int, optional): The number of classes in labels. Not necessary if
+                labels are not provided or where the labels are non-categorical.
             lshape (tuple, optional): Local shape for the input features
-                (e.g. height, width, channel for images)
-            make_onehot (bool, optional): True if y is a label that has to be converted to one hot
-                            False if y doesn't need to be converted to one hot
-                            (e.g. in a CAE)
+                (e.g. # channels, height, width)
+            make_onehot (bool, optional): True if y is a categorical label that has to be converted
+                to a one hot representation.
 
         """
         # Treat singletons like list so that iteration follows same syntax
@@ -82,6 +113,26 @@ class ArrayIterator(NervanaDataIterator):
 
         if make_onehot and nclass is None and y is not None:
             raise AttributeError('Must provide number of classes when creating onehot labels')
+
+        # if labels provided, they must have same # examples as the features
+        if y is not None:
+
+            assert all([y.shape[0] == x.shape[0] for x in X]), \
+                "Input features and labels must have equal number of examples."
+
+            # for classifiction, the labels must be from 0 .. K-1, where K=nclass
+            if make_onehot:
+                assert y.max() <= nclass - 1 and y.min() >= 0, \
+                    "Labels must range from 0 to {} (nclass-1).".format(nclass - 1)
+
+                assert (np.floor(y) == y).all(), \
+                    "Labels must only contain integers."
+
+        # if local shape is provided, then the product of lshape should match the
+        # number of features
+        if lshape is not None:
+            assert all([x.shape[1] == np.prod(lshape) for x in X]), \
+                "product of lshape {} does not match input feature size".format(lshape)
 
         # store shape of the input data
         self.shape = [x.shape[1] if lshape is None else lshape for x in X]
@@ -98,7 +149,7 @@ class ArrayIterator(NervanaDataIterator):
             return (self.be.array(z.reshape((-1, 1)), dtype=np.int32), self.be.iobuf(nclass),
                     lambda _in, _out: self.be.onehot(_in, axis=0, out=_out))
 
-        self.Xdev, self.Xbuf, self.unpack_func = zip(*[transpose_gen(x) for x in X])
+        self.Xdev, self.Xbuf, self.unpack_func = list(zip(*[transpose_gen(x) for x in X]))
 
         # Shallow copies for appending, iterating
         self.dbuf, self.hbuf = list(self.Xdev), list(self.Xbuf)
@@ -112,20 +163,22 @@ class ArrayIterator(NervanaDataIterator):
 
     @property
     def nbatches(self):
+        """
+        Return the number of minibatches in this dataset.
+        """
         return -((self.start - self.ndata) // self.be.bsz)
 
     def reset(self):
         """
-        For resetting the starting index of this dataset back to zero.
-        Relevant for when one wants to call repeated evaluations on the dataset
-        but don't want to wrap around for the last uneven minibatch
-        Not necessary when ndata is divisible by batch size
+        Resets the starting index of this dataset to zero. Useful for calling
+        repeated evaluations on the dataset without having to wrap around
+        the last uneven minibatch. Not necessary when data is divisible by batch size
         """
         self.start = 0
 
     def __iter__(self):
         """
-        Defines a generator that can be used to iterate over this dataset.
+        Returns a new minibatch of data with each call.
 
         Yields:
             tuple: The next minibatch which includes both features and labels.
@@ -162,16 +215,13 @@ class DataIterator(ArrayIterator):
 
 if __name__ == '__main__':
     from neon.data import load_mnist
-    (X_train, y_train), (X_test, y_test) = load_mnist()
+    (X_train, y_train), (X_test, y_test), nclass = load_mnist()
 
-    from neon.backends.nervanagpu import NervanaGPU
-    ng = NervanaGPU(0, device_id=1)
+    from neon.backends import gen_backend
+    be = gen_backend('gpu', batch_size=128)
 
-    NervanaObject.be = ng
-    ng.bsz = 128
-    train_set = ArrayIterator(
-        [X_test[:1000], X_test[:1000]], y_test[:1000], nclass=10)
+    train_set = ArrayIterator(X_test[:1000], y_test[:1000], nclass=nclass)
     for i in range(3):
         for bidx, (X_batch, y_batch) in enumerate(train_set):
-            print bidx, train_set.start
+            logger.display("{}".format((bidx, train_set.start)))
             pass

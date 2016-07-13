@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -17,10 +17,12 @@ Convolution layer tests
 """
 import itertools as itt
 import numpy as np
+import pytest
 from neon import NervanaObject
+from neon.backends.nervanagpu import NervanaGPU
 from neon.layers.layer import Convolution
 from neon.initializers.initializer import Uniform
-from tests.utils import allclose_with_out
+from utils import allclose_with_out
 
 
 def pytest_generate_tests(metafunc):
@@ -46,7 +48,7 @@ def pytest_generate_tests(metafunc):
         if metafunc.config.option.all:
             bsz_rng = [64]
             indim_rng = [16, 32]
-            nifm_rng = [1, 2, 3]
+            nifm_rng = [3, 4, 32]
             fs_rng = [2, 3]
             stride_rng = [1, 2]
             nofm_rng = [16, 32, 64]
@@ -61,7 +63,7 @@ def pytest_generate_tests(metafunc):
         else:
             bsz_rng = [64]
             indim_rng = [32]
-            nifm_rng = [3]
+            nifm_rng = [4]
             fs_rng = [2, 5]
             nofm_rng = [16]
             stride_rng = [1, 2]
@@ -75,7 +77,7 @@ def pytest_generate_tests(metafunc):
         eps = np.finfo(np.float32).eps
         if metafunc.config.option.all:
             indim_rng = [16, 32]
-            nifm_rng = [1, 3]
+            nifm_rng = [3, 4]
             fs_rng = [2, 3]
             nofm_rng = [16]
             rng_max_rng = [eps, eps * 10, 1.0, 100]
@@ -91,7 +93,7 @@ def pytest_generate_tests(metafunc):
             fargs = itt.chain(fargs1, fargs2)
         else:
             indim_rng = [16]
-            nifm_rng = [1, 3]
+            nifm_rng = [3, 4]
             fs_rng = [2, 5]
             nofm_rng = [16]
             rng_max_rng = [2.0]
@@ -110,7 +112,7 @@ def test_conv_zeros(backend_default, zeros_convargs):
 
     # basic sanity check with 0 weights random inputs
     init_unif = Uniform(low=0.0, high=0.0)
-    inshape = (3, 32, 32)
+    inshape = (32, 32, 32)
     insize = np.prod(inshape)
     neon_layer = Convolution(fshape=(fshape, fshape, nofm),
                              strides=1, padding=0, init=init_unif)
@@ -133,8 +135,13 @@ def test_conv_zeros(backend_default, zeros_convargs):
 
 
 def test_conv_ones(backend_default, ones_convargs):
+
     dtypeu = np.float32
     indim, nifm, fshape, nofm, batch_size, stride, pad = ones_convargs
+    if isinstance(NervanaObject.be, NervanaGPU) and NervanaObject.be.compute_capability < (5, 0):
+        if nifm % 4 != 0:
+            pytest.skip(msg="C dim must be a multiple of 4 for Kepler bprop kernel")
+
     NervanaObject.be.bsz = batch_size
 
     # weights set to one
@@ -198,7 +205,11 @@ def test_conv_ones(backend_default, ones_convargs):
 
 
 def test_conv_rand(backend_default, rand_convargs):
+
     indim, nifm, fshape, nofm, batch_size, stride, rng_max, w_rng, pad = rand_convargs
+    if isinstance(NervanaObject.be, NervanaGPU) and NervanaObject.be.compute_capability < (5, 0):
+        if nifm % 4 != 0:
+            pytest.skip(msg="C dim must be a multiple of 4 for Kepler bprop kernel")
     NervanaObject.be.bsz = batch_size
     inp_rng = [0.0, rng_max]
     dtypeu = np.float32
@@ -248,7 +259,7 @@ def test_conv_rand(backend_default, rand_convargs):
     # fprop calculation
     ref_layer.fprop(inpa.T, permute=True)
     ref_out_perm = ref_layer.y
-    atol = 4*np.max(np.abs(ref_out - ref_out_perm))
+    atol = 4 * np.max(np.abs(ref_out - ref_out_perm))
 
     # compare ref and neon layer fprop outputs
     # using the empirically determined atol
@@ -277,10 +288,10 @@ def test_conv_rand(backend_default, rand_convargs):
     ref_deltas_perm = ref_layer.berror_nopad.T
     ref_dW_perm = ref_layer.updates
 
-    atol = 4*np.max(np.abs(ref_deltas - ref_deltas_perm))
+    atol = 4 * np.max(np.abs(ref_deltas - ref_deltas_perm))
     assert allclose_with_out(ref_deltas, neon_deltas, atol=atol, rtol=1.e-4)
 
-    atol = 4*np.max(np.abs(ref_dW - ref_dW_perm))
+    atol = 4 * np.max(np.abs(ref_dW - ref_dW_perm))
     assert allclose_with_out(ref_dW.T, neon_dW, atol=atol, rtol=1.e-4)
     return
 
@@ -311,16 +322,16 @@ class ConvLayerRef(object):
         self.ifmheight, self.ifmwidth = ifmshape_nopad
         self.ifmshape_nopad = ifmshape_nopad
         self.padding = padding
-        self.ifmshape = (self.ifmheight + 2*padding, self.ifmwidth + 2*padding)
+        self.ifmshape = (self.ifmheight + 2 * padding, self.ifmwidth + 2 * padding)
         self.fshape = fshape
 
         self.stride = strides
         self.fheight, self.fwidth = fshape
-        self.ofmheight = (self.ifmshape[0] - self.fheight) / strides + 1
-        self.ofmwidth = (self.ifmshape[1] - self.fwidth) / strides + 1
+        self.ofmheight = (self.ifmshape[0] - self.fheight) // strides + 1
+        self.ofmwidth = (self.ifmshape[1] - self.fwidth) // strides + 1
         ofmshape = (self.ofmheight, self.ofmwidth)
-        self.ifmsize = self.ifmshape[0]*self.ifmshape[1]
-        self.ifmsize_nopad = self.ifmshape_nopad[0]*self.ifmshape_nopad[1]
+        self.ifmsize = self.ifmshape[0] * self.ifmshape[1]
+        self.ifmsize_nopad = self.ifmshape_nopad[0] * self.ifmshape_nopad[1]
         self.ofmsize = self.ofmheight * self.ofmwidth
         self.nout = self.ofmsize * nofm
 
@@ -332,7 +343,7 @@ class ConvLayerRef(object):
         self.gprime = get_prime(g)
         self.z = np.zeros((mbs, self.nout), dtype=dtypeu)
         self.y = np.zeros((mbs, self.nout), dtype=dtypeu)
-        ofmstarts = np.array(range(0, (self.ofmsize * nofm), self.ofmsize))
+        ofmstarts = np.array(list(range(0, (self.ofmsize * nofm), self.ofmsize)))
         self.ofmlocs = np.zeros((self.ofmsize, nofm), dtype='i32')
         for dst in range(self.ofmsize):
             self.ofmlocs[dst, :] = ofmstarts + dst
@@ -348,7 +359,7 @@ class ConvLayerRef(object):
         self.pos = pos
         if self.pos > 0:
             self.bpropbuf = np.zeros((mbs, self.fsize), dtype=dtypeu)
-            self.berror = np.zeros((mbs, self.ifmsize*nifm), dtype=dtypeu)
+            self.berror = np.zeros((mbs, self.ifmsize * nifm), dtype=dtypeu)
             self.berrorshards = np.zeros((self.fheight * self.fwidth, mbs,
                                           self.ifmsize * nifm), dtype=dtypeu)
 

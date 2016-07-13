@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2014 Nervana Systems Inc.
+# Copyright 2014-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -15,7 +15,8 @@
 """
 Our GPU based backend interface and tensor data structure.
 """
-
+from __future__ import division
+from builtins import round
 import os
 import sys
 import numpy as np
@@ -28,11 +29,12 @@ from struct import unpack_from
 from pytools import memoize_method
 from functools import wraps
 from math import log
-
+from neon import logger as neon_logger
 from neon.backends import kernel_specs
 from neon.backends.backend import Tensor, Backend, OpTreeNode, OpCollection
 from neon.backends.layer_gpu import ConvLayer, DeconvLayer, PoolLayer, _get_sm_count
 from neon.backends.kernels.cuda import pooling, roipooling
+from neon.util.persist import get_cache_dir
 from scikits.cuda import cublas
 
 _none_slice = slice(None, None, None)
@@ -64,7 +66,7 @@ class GPUTensor(Tensor):
                                   stochastic rouding.
 
     See also:
-        NervanaGPU class
+        :class:`NervanaGPU` class
 
     Notes:
         Unlike numpy, in this implementation we never collapse dimensions, and
@@ -104,7 +106,7 @@ class GPUTensor(Tensor):
             for dim in shape:
                 size *= dim
         except TypeError:
-            assert isinstance(shape, (int, long, np.integer))
+            assert isinstance(shape, (int, np.integer))
             size = shape
             shape = (shape, 1)
 
@@ -132,7 +134,7 @@ class GPUTensor(Tensor):
         if gpudata is None:
             # print "allocate!"
             if size:
-                # print(drv.mem_get_info())
+                # print drv.mem_get_info()
                 self.gpudata = allocator(self.nbytes)
             else:
                 self.gpudata = None
@@ -181,7 +183,7 @@ class GPUTensor(Tensor):
 
     def __getitem__(self, index):
         """
-        Return a sliced view of an array
+        Return a sliced view of an array.
         """
         if not isinstance(index, tuple):
             # speed up common case of [:]
@@ -352,7 +354,7 @@ class GPUTensor(Tensor):
 
         elif isinstance(value, GPUTensor):
             # TODO: add an is_binary_compat like function
-            if self.is_contiguous and value.is_contiguous and self.dtype == value.dtype:
+            if self.is_contiguous and value.is_contiguous and self.dtype == value.dtype and self.shape == value.shape:
                 drv.memcpy_dtod_async(
                     self.gpudata, value.gpudata, self.nbytes, stream)
             else:
@@ -391,7 +393,7 @@ class GPUTensor(Tensor):
         assert ary.strides == tuple(
             self.dtype.itemsize * s for s in self.strides)
 
-        drv.memcpy_htod_async(self.gpudata, ary, stream)
+        drv.memcpy_htod_async(int(self.gpudata), ary, stream)
 
         return self
 
@@ -433,13 +435,18 @@ class GPUTensor(Tensor):
 
     def asbuffer(self):
         """
-        asbuffer returns buffer interface to gpu data
+        Returns buffer interface to gpu data.
         """
         return self.gpudata.as_buffer(self.nbytes)
 
     def take(self, indices, axis, out=None):
         """
         Take elements from an array along an axis.
+
+        Arguments:
+            indices (Tensor, numpy ndarray): indicies of elements to select
+            axis (int): axis across which to select the values
+            out (Tensor): Output Tensor to fill with selected values
         """
         if axis == 1:
             view = self.__getitem__((_none_slice, indices))
@@ -451,18 +458,44 @@ class GPUTensor(Tensor):
         return view
 
     def fill(self, value):
+        """
+        Assign specified value to each element of this GPUTensor.
+
+        Arguments:
+            value (numeric): The value to be assigned to each element.
+
+        Return:
+            GPUTensor: updated view of the data.
+        """
         return self._assign(value)
 
     def copy(self, a):
+        """
+        Construct and return a deep copy of the Tensor passed.
+
+         Arguments:
+            a (Tensor): the object to copy
+
+        Returns:
+            GPUTensor: updated view of the data.
+        """
         return self._assign(a)
 
     def copy_from(self, a):
-        """ alias of copy"""
+        """
+        Alias of copy.
+
+        Arguments:
+            a (Tensor): the object to copy
+
+        Returns:
+            GPUTensor: updated view of the data.
+        """
         return self.set(a)
 
     def reshape(self, *shape):
         """
-        return a reshaped view
+        Return a reshaped view.
         """
         if isinstance(shape[0], (tuple, list)):
             shape = tuple(shape[0])
@@ -471,7 +504,7 @@ class GPUTensor(Tensor):
             shape = shape + (1, )
 
         if -1 in shape:
-            missing_dim = -self.size / np.prod(shape)
+            missing_dim = -self.size // int(np.prod(shape))
             shape = tuple([missing_dim if x == -1 else x for x in shape])
 
         if shape == self.shape:
@@ -482,8 +515,10 @@ class GPUTensor(Tensor):
         if size != self.size:
             raise ValueError("total size of new array must be unchanged")
 
-        if not self.is_contiguous:
+        if self.take_array:
             raise TypeError("reshaping of non-contiguous arrays is not yet supported")
+
+        new_strides = _reshape_strides(self.strides, self.shape, shape)
 
         return self.__class__(
             backend=self.backend,
@@ -492,14 +527,14 @@ class GPUTensor(Tensor):
             allocator=self.allocator,
             base=self,
             gpudata=self.gpudata,
-            strides=_contiguous_strides(shape),
+            strides=new_strides,
             name=self.name,
             rounding=self.rounding)
 
     @property
     def T(self):
         """
-        return a transposed view
+        Return a transposed view.
         """
         if len(self.shape) <= 2:
             shape = self.shape[::-1]
@@ -535,7 +570,7 @@ class GPUTensor(Tensor):
 
     def share(self, shape, dtype=None, name=None):
         """
-        return a view: ary, where ary.size <= self.size
+        Return a view: ary, where ary.size <= self.size.
         Allows easy sharing of temporary memory
         """
         size = np.prod(shape)
@@ -608,7 +643,7 @@ class GPUTensor(Tensor):
 
 def memoize_stacks(func):
     """
-    memoize the stacks using intrinsic_key_maps
+    Memoize the stacks using intrinsic_key_maps.
     """
     cache = {}
 
@@ -640,7 +675,7 @@ def memoize_stacks(func):
 
 class NervanaGPU(Backend):
     """
-    The primary interface class and factory for GPUTensors
+    The primary interface class and factory for GPUTensors.
 
     Arguments:
         stochastic_round (int or bool, optional): set to desired number of mantissa
@@ -657,10 +692,10 @@ class NervanaGPU(Backend):
 
         TODO: define other keyword parameters!
         """
-
+    backend_name = 'gpu'
     # size of the RNG pool on device
     # currently this is hard wired
-    _RNG_POOL_SIZE = (3*2048*32, 1)
+    _RNG_POOL_SIZE = (3 * 2048 * 32, 1)
     def __init__(self,
                  rng_seed=None,
                  default_dtype=np.float32,
@@ -673,7 +708,12 @@ class NervanaGPU(Backend):
                  hist_offset=-48,
                  compat_mode=None,
                  enable_winograd=True,
-                 cache_dir=os.path.join(os.path.expanduser('~'), 'nervana/cache')):
+                 # Ignored
+                 num_devices=None
+                 ):
+        from neon.backends.util import check_gpu
+        check_gpu.ensure_gpu_capability(device_id)
+
         if default_dtype not in [np.float16, np.float32]:
             raise ValueError('Default data type for nervanagpu '
                              'backend must be float16 or 32')
@@ -723,15 +763,14 @@ class NervanaGPU(Backend):
         self.buf = {}
         self.buf_active = {}
         self.warmup = False
+        self.sm_count = _get_sm_count()
 
         # store histograms for batched memcpy
-        self.hist_bins = hist_bins
-        self.hist_offset = hist_offset
-        self.hist_map = dict()
-        self.hist_idx = 0
-        self.hist_max = 4*4096
-        self.hist_base = drv.mem_alloc(self.hist_bins * self.hist_max * 4)
-        drv.memset_d32(self.hist_base, 0, self.hist_bins * self.hist_max)
+        self.hist_bins, self.hist_offset = None, None
+        self.set_hist_buffers(hist_bins, hist_offset)
+
+        # store GPU memory size in bytes
+        self.gpu_memory_size = drv.mem_get_info()[1]
 
         # Fall back to CUDA C kernels on older (pre-Maxwell) GPU generations
         self.compute_capability = drv.Device(self.device_id).compute_capability()
@@ -749,9 +788,33 @@ class NervanaGPU(Backend):
             self.use_cudac_kernels = False
 
         self.enable_winograd = enable_winograd
-        self.cache_dir = cache_dir
-        if not os.path.isdir(self.cache_dir):
-            os.makedirs(self.cache_dir)
+        self.cache_dir = get_cache_dir()
+
+    def set_hist_buffers(self, hist_bins, hist_offset):
+        if (hist_bins != self.hist_bins or hist_offset != self.hist_offset):
+            self.hist_bins = hist_bins
+            self.hist_offset = hist_offset
+            self.hist_map = dict()
+            self.hist_idx = 0
+            self.hist_max = 4 * 4096
+            self.hist_base = drv.mem_alloc(self.hist_bins * self.hist_max * 4)
+            drv.memset_d32(self.hist_base, 0, self.hist_bins * self.hist_max)
+
+    def scratch_buffer_reset(self):
+        self.scratch_size = 0
+        self.scratch_offset = 0
+        _reset_scratch_data()
+
+    def scratch_buffer_init(self):
+        self.scratch_offset = 0
+
+    def cleanup_backend(self):
+        super(NervanaGPU, self).cleanup_backend()
+        try:
+            self.ctx.pop()
+            self.ctx.detach()
+        except:
+            pass
 
     def scratch_buffer(self, size):
 
@@ -759,7 +822,9 @@ class NervanaGPU(Backend):
             size += 128 - (size & 127)
 
         if size > self.scratch_size:
-            raise RuntimeError("nervanagpu.scratch_size(%d) is too small for this operation." % self.scratch_size)
+            raise RuntimeError(
+                "nervanagpu.scratch_size(%d) is too small for this operation(%d)" % (
+                    self.scratch_size, size))
 
         self.scratch_offset = size
 
@@ -771,7 +836,9 @@ class NervanaGPU(Backend):
             size += 128 - (size & 127)
 
         if size + self.scratch_offset > self.scratch_size:
-            raise RuntimeError("nervanagpu.scratch_size(%d) is too small for this operation." % self.scratch_size)
+            raise RuntimeError(
+                "nervanagpu.scratch_size(%d) is too small for this operation(%d, %d)" % (
+                    self.scratch_size, size, self.scratch_offset))
 
         data = int(_get_scratch_data(self.scratch_size)) + self.scratch_offset
         self.scratch_offset += size
@@ -800,7 +867,7 @@ class NervanaGPU(Backend):
 
     def gen_rng(self, seed=None):
         """
-        Generate the random number generator on device and on host
+        Generate the random number generator on device and on host.
 
         Arguments:
             seed (int): random number generator seed
@@ -836,7 +903,7 @@ class NervanaGPU(Backend):
     def _gen_dev_randstate(self):
         """
         Generate a list of random uint32 numbers to seed the LFSR
-        states on device
+        states on device.
 
         Returns:
             np.array: return a vector of uint32 numbers
@@ -846,7 +913,7 @@ class NervanaGPU(Backend):
         state_save = self.rng.get_state()
 
         # smaller number for 32bit systems
-        maxexp = 32 if sys.maxint > 2**32 else 30
+        maxexp = 32 if sys.maxsize > 2**32 else 30
 
         # draw _RNG_POOL_SIZE 32 bit ints to seed LFSR on device
         # lower bound 1 to avoid seeding LFSR with 0
@@ -868,7 +935,7 @@ class NervanaGPU(Backend):
 
     def rng_set_state(self, rng_states):
         """
-        Set the RNG state for both the on device and on host RNGs
+        Set the RNG state for both the on device and on host RNGs.
 
         Arguments:
             rng_states (tuple of np.arrays): tuple with 2 elements
@@ -881,7 +948,7 @@ class NervanaGPU(Backend):
 
     def rng_get_state(self):
         """
-        Return the current state of the on-host and on-device RNGs
+        Return the current state of the on-host and on-device RNGs.
 
         Returns:
             (np.array, np.array): the on-host and on-device RNG state vectors,
@@ -916,16 +983,21 @@ class NervanaGPU(Backend):
 
     def fill_normal(self, ary, mean=0, stdv=1):
         """
-        Fills ary with gaussian noise with given mean and std dev.
+        Fill ary with normally distributed random numbers.
+
+        Arguments:
+            ary (Tensor): Tensor to fill with random values
+            mean (float): Mean value. Default 0
+            stdv (float): standard deviation value.  Default 1
         """
         self.pcg.fill_normal(p_gpuarray(ary.shape, ary.dtype, gpudata=ary.gpudata))
-        if not all([mean==0, stdv==1]):
+        if not all([mean == 0, stdv == 1]):
             ary[:] = ary * stdv + mean
 
     def _get_rand_state_dev(self):
         """
-        similar to @context_dependent_memoize, with additional ability to reset
-        the random pool by `rng_reset`
+        Similar to @context_dependent_memoize, with additional ability to reset
+        the random pool by `rng_reset`.
 
         initialize our common pool of randomness (1/4 MB):
         MAX_THREADS_PER_MULTIPROCESSOR * 32 SMs (32 to be somewhat future proof
@@ -939,7 +1011,7 @@ class NervanaGPU(Backend):
 
     def _buf_malloc(self, shape):
         """
-        returns a buffer of size shape, equivalent of calling be.empty(shape)
+        Returns a buffer of size shape, equivalent of calling be.empty(shape).
         """
         # create a list of buffers of the shape
         if shape not in self.buf:
@@ -956,8 +1028,8 @@ class NervanaGPU(Backend):
 
     def _buf_free(self):
         """
-        move all tensors from self.buffer_active to self.buffer
-        the idea is to reuse those tensors for other optrees
+        Move all tensors from self.buffer_active to self.buffer
+        the idea is to reuse those tensors for other optrees.
         """
         for shape in self.buf_active:
             self.buf[shape].extend(self.buf_active[shape])
@@ -988,7 +1060,7 @@ class NervanaGPU(Backend):
     @memoize_stacks
     def _split_to_stacks(self, optree):
         """
-        split an optree to stacks
+        Split an optree to stacks.
         """
         # post-order traversal
         whole_stack = optree.traverse(list())
@@ -1143,7 +1215,11 @@ class NervanaGPU(Backend):
 
     def execute(self, optree):
         """
-        Execute the optree. Break optree into sub-optrees if necessary.
+        Execute the optree.
+
+        Arguments:
+            optree: (OpTreeNode): the OpTreeNode object that represents all
+                                  the operations
         """
         from neon.backends.float_ew import call_compound_kernel
 
@@ -1171,6 +1247,25 @@ class NervanaGPU(Backend):
               parallel=False, distributed=False, allocator=drv.mem_alloc):
         """
         Allocate the space for a GPUTensor
+
+        Arguments:
+            shape (int, list): The size of each dimension of the Tensor.
+
+            dtype (dtype, optional): Element data type.  If not specified we
+                                     use default_dtype value
+
+            persist_values (bool, optional): If set to True (the default), the
+                                             values assigned to this Tensor
+                                             will persist across multiple begin
+                                             and end calls.  Setting to False
+                                             may provide a performance increase
+                                             if values do not need to be
+                                             maintained across such calls
+
+            allocator (function, optional): Memory allocator.
+
+        Returns:
+            GPUTensor: newly created data structure reference
         """
         dtype = self.default_dtype if dtype is None else dtype
         return GPUTensor(self, shape, dtype=dtype, name=name,
@@ -1180,7 +1275,27 @@ class NervanaGPU(Backend):
     def array(self, ary, dtype=None, name=None, persist_values=True,
               parallel=False, distributed=False, allocator=drv.mem_alloc):
         """
-        converts a numpy array to a GPUTensor
+        Converts a numpy array to a GPUTensor
+
+        Arguments:
+            ary (numpy.ndarray): The data structure containing element values
+                                 spread across a number of dimensions.  Python
+                                 built-in types like ints and lists are
+                                 supported.
+            dtype (dtype, optional): Element data type.  If not specified we
+                                     use default_dtype value ('float32'
+                                     unless overridden).
+            persist_values (bool, optional): If set to True (the default), the
+                                             values assigned to this Tensor
+                                             will persist across multiple begin
+                                             and end calls.  Setting to False
+                                             may provide a performance increase
+                                             if values do not need to be
+                                             maintained across such calls
+            allocator (function, optional): Memory allocator.
+
+        Returns:
+            GPUTensor: newly created data structure reference
         """
         dtype = self.default_dtype if dtype is None else dtype
         if ary.ndim < self._min_dims:
@@ -1192,7 +1307,25 @@ class NervanaGPU(Backend):
     def zeros(self, shape, dtype=None, name=None, persist_values=True,
               parallel=False, distributed=False, allocator=drv.mem_alloc):
         """
-        Returns an array of the given shape and dtype filled with 0's.
+        Instantiate a new instance of the GPUTensor class setting each element
+        value to 0.
+
+        Arguments:
+            shape (list of ints): The size of each dimension of the Tensor.
+            dtype (dtype, optional): Element data type.  If not specified we
+                                     use default_dtype value ('float32'
+                                     unless overridden).
+            persist_values (bool, optional): If set to True (the default), the
+                                             values assigned to this Tensor
+                                             will persist across multiple begin
+                                             and end calls.  Setting to False
+                                             may provide a performance increase
+                                             if values do not need to be
+                                             maintained across such calls
+            allocator (function, optional): Memory allocator.
+
+        Returns:
+            GPUTensor: newly created data structure reference
         """
         dtype = self.default_dtype if dtype is None else dtype
         return GPUTensor(self, shape, dtype=dtype, name=name,
@@ -1202,7 +1335,25 @@ class NervanaGPU(Backend):
     def ones(self, shape, dtype=None, name=None, persist_values=True,
              parallel=False, distributed=False, allocator=drv.mem_alloc):
         """
-        Returns an array of the given shape and dtype filled with 1's.
+        Instantiate a new instance of the GPUTensor class setting each element
+        value to 1.
+
+        Arguments:
+            shape (list of ints): The size of each dimension of the Tensor.
+            dtype (dtype, optional): Element data type.  If not specified we
+                                     use default_dtype value ('float32'
+                                     unless overridden).
+            persist_values (bool, optional): If set to True (the default), the
+                                             values assigned to this Tensor
+                                             will persist across multiple begin
+                                             and end calls.  Setting to False
+                                             may provide a performance increase
+                                             if values do not need to be
+                                             maintained across such calls
+            allocator (function, optional): Memory allocator.
+
+        Returns:
+            GPUTensor: newly created data structure reference
         """
         dtype = self.default_dtype if dtype is None else dtype
         return GPUTensor(self, shape, dtype=dtype, name=name,
@@ -1211,7 +1362,16 @@ class NervanaGPU(Backend):
 
     def empty_like(self, other_ary, name=None):
         """
-        Returns an array with the same params as another
+        Instantiate a new instance of this backend's Tensor class, with the
+        shape taken from ary.
+
+        Arguments:
+            ary (tensor object): Tensor to inherit the dimensions of.
+            dtype (data-type, optional): If present, specifies the underlying
+                                         type to employ for each element.
+
+        Returns:
+            Tensor: array object
         """
         return GPUTensor(self, other_ary.shape, dtype=other_ary.dtype,
                          name=name, persist_values=other_ary.persist_values,
@@ -1219,7 +1379,16 @@ class NervanaGPU(Backend):
 
     def zeros_like(self, other_ary, name=None):
         """
-        Returns an array with the same params as another
+        Instantiate a new instance of this backend's Tensor class, with the
+        shape taken from ary and populating each element with a value of 0.
+
+        Arguments:
+            ary (tensor object): Tensor to inherit the dimensions of.
+            dtype (data-type, optional): If present, specifies the underlying
+                                         type to employ for each element.
+
+        Returns:
+            Tensor: array object
         """
         return GPUTensor(self, other_ary.shape, dtype=other_ary.dtype,
                          name=name, persist_values=other_ary.persist_values,
@@ -1228,14 +1397,23 @@ class NervanaGPU(Backend):
 
     def compound_dot(self, A, B, C, alpha=1.0, beta=0.0, relu=False, bsum=None, repeat=1, size=None):
         """
+        Doing following operations (* is dot product)
         C = alpha * A * B   + beta * C
         C = alpha * A.T * B + beta * C
-        C = alpha * A * B.T + beta * C
+        C = alpha * A * B.T + beta * C.
 
         relu: if true applied before output (and prior to beta addition)
 
         size: one of 32x128, 128x32, 64x128, 128x64, 128x128.  Sometimes the
               fastest tiling isn't chosen for you.
+
+        Arguments:
+            A, B (GPUTensor): input operands
+            C (GPUTensor): output
+            alpha (float): scale A*B term
+            beta (float): scale C term before sum
+            relu (bool): whether to apply ReLu before output
+            size(nxm): Sometimes the fastest tiling isn't chosen for you.
         """
         assert A.dtype.type == B.dtype.type == C.dtype.type
 
@@ -1258,7 +1436,8 @@ class NervanaGPU(Backend):
 
         if A.is_trans:
             opA = 't'
-            lda *= 8 * A.dtype.itemsize  # saves a kernel register
+            if size not in ("32x64", "16x64"):
+                lda *= 8 * A.dtype.itemsize  # saves a kernel register
         else:
             opA = 'n'
 
@@ -1266,7 +1445,8 @@ class NervanaGPU(Backend):
             opB = 't'
         else:
             opB = 'n'
-            ldb *= 8 * B.dtype.itemsize  # saves a kernel register
+            if size not in ("32x64", "16x64"):
+                ldb *= 8 * B.dtype.itemsize  # saves a kernel register
 
         op = opA + opB
         assert op != "tt"
@@ -1336,21 +1516,21 @@ class NervanaGPU(Backend):
         gridA = m // sizeA + (m % sizeA != 0)
         gridB = n // sizeB + (n % sizeB != 0)
 
-        k_vec = 8 if sizeA == 32 or sizeB == 32 else 16
+        k_vec = 8 if sizeA in (16,32) or sizeB == 32 else 16
 
+        vec_opt = None
         if op == "tn":
             if (m % 4 == 0 and n % 4 == 0 and
                 A.strides[1] % 4 == 0 and B.strides[0] % 4 == 0):
-                op += "_vec"
+                vec_opt = ("vec",)
         elif op == "nn":
             if (k % k_vec == 0 and n % 4 == 0 and
                 A.strides[0] % k_vec == 0 and B.strides[0] % 4 == 0):
-                op += "_vec"
+                vec_opt = ("vec",)
         elif op == "nt":
             if (k % k_vec == 0 and n % 4 == 0 and
                 A.strides[0] % k_vec == 0 and B.strides[1] % k_vec == 0):
-                op += "_vec"
-
+                vec_opt = ("vec",)
 
         # nt and nn are more efficient with k%16==0
         if C.dtype.type is np.float16:
@@ -1364,11 +1544,11 @@ class NervanaGPU(Backend):
         if relu:
             flags |= 2
 
-        kernel = kernel_specs.get_kernel("_".join((clss, op, size)))
+        kernel = kernel_specs.get_kernel("_".join((clss, op, size)), vec_opt)
         params = [
-            (1, gridA, gridB), (kernel.threads, 1, 1), self.stream,
+            (1, int(gridA), int(gridB)), (kernel.threads, 1, 1), self.stream,
             C.gpudata, A.gpudata, B.gpudata, alpha, beta, flags,
-            lda, ldb, ldc, m, n, k,
+            int(lda), int(ldb), int(ldc), int(m), int(n), int(k),
             0, 0, 0, 0]
 
         # Warmup
@@ -1388,10 +1568,10 @@ class NervanaGPU(Backend):
             end.synchronize()
             msecs = end.time_since(start) / repeat
             gflops = (m * n * k * 2.0) / (msecs * 1000000.0)
-            print("%7.3f msecs %4.0f gflops (%s_%s: %d,%d,%d) size:%s grid:(%d,%d)" %
+            neon_logger.display("%7.3f msecs %4.0f gflops (%s_%s: %d,%d,%d) size:%s grid:(%d,%d)" %
                  (msecs, gflops, clss, op, m, n, k, size, gridA, gridB))
             if repeat > 1:
-                return gflops
+                return msecs, gflops
         if bsum is not None:
             bsum[:] = self.sum(C, 1)
         return C
@@ -1495,7 +1675,9 @@ class NervanaGPU(Backend):
         if (op == "tn" and m % 4 == 0 and n % 4 == 0 or
                 op == "nn" and k % k_vec == 0 and n % 4 == 0 or
                 op == "nt" and k % k_vec == 0):
-            op += "_vec"
+            vec_opt = ("vec",)
+        else:
+            vec_opt = None
 
         # nt and nn are more efficient with k%16==0
         if C.dtype.type is np.float16:
@@ -1505,7 +1687,7 @@ class NervanaGPU(Backend):
         else:
             raise TypeError("Only floating point dot currently supported.")
 
-        kernel = kernel_specs.get_kernel("_".join((clss, op, size)))
+        kernel = kernel_specs.get_kernel("_".join((clss, op, size)), vec_opt)
         params = [
             (batch_grid, gridA, gridB), (threads, 1, 1), self.stream,
             C.gpudata, A.gpudata, B.gpudata, alpha, beta, flags,
@@ -1528,9 +1710,8 @@ class NervanaGPU(Backend):
             end.record(self.stream)
             end.synchronize()
             msecs = end.time_since(start) / repeat
-            gflops = (batch_loops * batch_grid * m * n * k * 2.0) / \
-                (msecs * 1000000.0)
-            print("%7.3f msecs %4.0f gflops (%s_%s: %d,%d,%d) size:%s grid:(%d,%d,%d) loops:%d" %
+            gflops = (batch_loops * batch_grid * m * n * k * 2.0) / (msecs * 1000000.0)
+            neon_logger.display("%7.3f msecs %4.0f gflops (%s_%s: %d,%d,%d) size:%s grid:(%d,%d,%d) loops:%d" %
                   (msecs, gflops, clss, op, m, n, k, size, batch_grid, gridA, gridB, batch_loops))
             if repeat > 1:
                 return gflops
@@ -1603,8 +1784,7 @@ class NervanaGPU(Backend):
                    D=1, H=1, W=1,
                    T=1, R=1, S=1,
                    pad_d=0, pad_h=0, pad_w=0,
-                   str_d=1, str_h=1, str_w=1,
-                   relu=False, bsum=False):
+                   str_d=1, str_h=1, str_w=1):
         """
         Create a new ConvLayer parameter object.
         This then is passed as an argument to all the convolution operations.
@@ -1625,42 +1805,121 @@ class NervanaGPU(Backend):
         strides: factor to step the filters by in a given direction
 
         dtype: need to know dtype to setup proper kernels and params.
-
-        relu: apply a relu to the output for fprop or bprop
-
-        bsum: calculate the sum along the batchnorm axis for fprop or bprop
-              outputs an fp32 tensor of size Kx1
         """
         return ConvLayer(self, dtype, N, C, K, D, H, W, T, R, S,
-                         pad_d, pad_h, pad_w, str_d, str_h, str_w,
-                         relu, bsum)
+                         pad_d, pad_h, pad_w, str_d, str_h, str_w)
 
-    def fprop_conv(self, layer, I, F, O, alpha=1.0, beta=0.0, bsum=None, repeat=1):
+    def fprop_conv(self, layer, I, F, O,
+        X=None, bias=None, bsum=None, alpha=1.0, beta=0.0,
+        relu=False, brelu=False, slope=0.0, repeat=1):
+        """
+        fprop_conv:
+
+        Required Arguments:
+            layer: ConvLayer object created with conv_layer()
+            I: input tensor  (actiavtions)
+            F: filter tensor (weights)
+            O: output tensor (actiavtions)
+
+        Compounding Options:
+            X: tensor to use in bprop_relu or beta
+                can be same as O for beta accumulate (this is default when None)
+                should be same shape as O
+            bias: (K,1) tensor to use for adding bias to output
+                O += bias
+            bsum: (K,1) tensor to accumulate batch sum over (used in batchnorm or bprop_bias)
+                bsum = sum(O.reshape(K,-1), axis=1)
+                the sum operation is fully deterministic
+            alpha, beta:
+                O = alpha*O + beta*X
+                O = alpha*O + beta*O   (if X==O)
+            relu: boolean flag to apply:
+                O = max(O, 0) + slope*min(O, 0)
+                can be combined with bias (where bias is added first)
+            brelu: bprop_relu boolean flag to apply:
+                O *= (X > 0) + slope*(X < 0)
+                can be combined with bsum tensor to output bprop_bias
+
+        repeat: used in benchmarking
+        """
         assert layer.sizeI == I.size
         assert layer.sizeF == F.size
         assert layer.sizeO == O.size
 
-        layer.fprop_kernels.bind_params(I, F, O, alpha, beta, bsum)
+        layer.fprop_kernels.bind_params(I, F, O, X, bias, bsum, alpha, beta, relu, brelu, slope)
 
         return self._execute_conv("fprop", layer, layer.fprop_kernels, repeat)
 
-    def bprop_conv(self, layer, F, E, grad_I, alpha=1.0, beta=0.0, bsum=None, repeat=1):
+    def bprop_conv(self, layer, F, E, grad_I,
+        X=None, bias=None, bsum=None, alpha=1.0, beta=0.0,
+        relu=False, brelu=False, slope=0.0, repeat=1):
+        """
+        bprop_conv:
+
+        Required Arguments:
+            layer: ConvLayer object created with conv_layer()
+            E: error tensor (output gradient from previous layer)
+            F: filter tensor (weights)
+            grad_I: output tensor (gradient with respect to inputs)
+
+        Compounding Options:
+            X: tensor to use in bprop_relu or beta
+                can be same as grad_I for beta accumulate (this is default when None)
+                should be same shape as grad_I
+            bias: (C,1) tensor to use for adding bias to output
+                grad_I += bias
+            bsum: (C,1) tensor to accumulate batch sum over (used in batchnorm or bprop_bias)
+                bsum = sum(grad_I.reshape(C,-1), axis=1)
+                the sum operation is fully deterministic
+                if combined with brelu then brelu is applied first
+            alpha, beta:
+                grad_I = alpha*grad_I + beta*X
+                grad_I = alpha*grad_I + beta*grad_I   (if X==grad_I)
+            relu: boolean flag to apply:
+                grad_I = max(grad_I, 0) + slope*min(grad_I, 0)
+                can be combined with bias (where bias is added first)
+            brelu: bprop_relu boolean flag to apply:
+                grad_I *= (X > 0) + slope*(X < 0)
+                can be combined with bsum tensor to output bprop_bias
+
+        repeat: used in benchmarking
+        """
         assert layer.sizeF == F.size
         assert layer.sizeO == E.size
         assert layer.sizeI == grad_I.size
 
-        layer.bprop_kernels.bind_params(E, F, grad_I, alpha, beta, bsum)
+        layer.bprop_kernels.bind_params(E, F, grad_I, X, bias, bsum, alpha, beta, relu, brelu, slope)
 
         return self._execute_conv("bprop", layer, layer.bprop_kernels, repeat)
 
-    def update_conv(self, layer, I, E, grad_F, alpha=1.0, repeat=1):
+    def update_conv(self, layer, I, E, grad_F, alpha=1.0, beta=0.0, repeat=1):
+        """
+        update_conv:
+
+        Required Inputs:
+            layer: ConvLayer object created with conv_layer()
+            I: input tensor (actiavtions)
+            E: error tensor (output gradient from previous layer)
+            grad_F: output tensor (gradient with respect to weights)
+
+        Compounding Options:
+        alpha, beta:
+            O = alpha*O + beta*O
+
+        repeat: used in benchmarking
+        """
         assert layer.sizeI == I.size
         assert layer.sizeO == E.size
         assert layer.sizeF == grad_F.size
 
-        layer.updat_kernels.bind_params(I, E, grad_F, alpha)
-
-        return self._execute_conv("updat", layer, layer.updat_kernels, repeat)
+        if layer.NCK[0] < 4 and layer.TRS == (1, 1, 1):
+            Ir = I.reshape((layer.NCK[1], -1))
+            Er = E.reshape((layer.NCK[2], -1))
+            Gr = grad_F.reshape((layer.NCK[1], -1))
+            return self.compound_dot(A=Ir, B=Er.T, C=Gr, alpha=alpha, beta=beta, repeat=repeat)
+        else:
+            layer.updat_kernels.bind_params(I, E, grad_F, alpha, beta)
+            return self._execute_conv("updat", layer, layer.updat_kernels, repeat)
 
     def _execute_conv(self, op, layer, kernels, repeat):
         # Warmup
@@ -1673,19 +1932,14 @@ class NervanaGPU(Backend):
 
         kernels.execute(repeat)
 
-#        TODO not sure if this part is needed for cuda kernels?
-#        if convert_type:
-#            _fp_convert(C_gpudata, convert_type, C, reduce_shape,
-#                        self.compute_capability)
-
         if self.bench or repeat > 1:
             end.record(stream=self.stream)
             end.synchronize()
             msecs  = end.time_since(start) / repeat
             gflops = layer.flops / (msecs * 1000000.0)
             #if layer.TRS[2] == 3:
-            print("%7.3f msecs %5.0f gflops %6.0f (%s: %s)" %
-                  (msecs, gflops, layer.flops/1000000.0, op, layer))
+            neon_logger.display("%7.3f msecs %5.0f gflops %6.0f (%s: %s)" %
+                  (msecs, gflops, layer.flops / 1000000.0, op, layer))
             return msecs, gflops
         return 0, 0
 
@@ -1694,8 +1948,7 @@ class NervanaGPU(Backend):
                      P, Q,
                      R=1, S=1,
                      pad_d=0, pad_h=0, pad_w=0,
-                     str_d=1, str_h=1, str_w=1,
-                     relu=False, bsum=False):
+                     str_d=1, str_h=1, str_w=1):
         """
         Create a new DeconvLayer parameter object.
         This then is passed as an argument to all the convolution operations.
@@ -1719,16 +1972,9 @@ class NervanaGPU(Backend):
         strides: factor to step the filters by in a given direction
 
         dtype: need to know dtype to setup proper kernels and params.
-
-        relu: apply a relu to the output for fprop or bprop
-
-        bsum: calculate the sum along the batchnorm axis for fprop or bprop
-              outputs an fp32 tensor of size Kx1
-
         """
         return DeconvLayer(self, dtype, N, C, K, P, Q, R, S,
-                           pad_d, pad_h, pad_w, str_d, str_h, str_w,
-                           relu, bsum)
+                           pad_d, pad_h, pad_w, str_d, str_h, str_w)
 
     def lrn_layer(self, dtype, N, C, D=1, H=1, W=1, J=1):
         """
@@ -1749,7 +1995,7 @@ class NervanaGPU(Backend):
         Leave spatial dimensions at 1 to allow feature map pooling in the fc layers.
         """
         assert J % 2 == 1, "Only support odd LRN window size"
-        pad_c = J / 2
+        pad_c = J // 2
         op = 'lrn'
         lrn_opts = dict(T=1, R=1, S=1,
                         pad_c=pad_c,
@@ -1857,7 +2103,7 @@ class NervanaGPU(Backend):
             end.record(self.stream)
             end.synchronize()
             msecs = end.time_since(start) / repeat
-            print("%7.3f msecs (%s) grid:%s" % (msecs, layer, kernel_args[1]))
+            neon_logger.display("%7.3f msecs (%s) grid:%s" % (msecs, layer, kernel_args[1]))
 
     def pool_layer(self, dtype,
                    op, N, C,
@@ -1945,13 +2191,13 @@ class NervanaGPU(Backend):
             end.record(self.stream)
             end.synchronize()
             msecs = end.time_since(start) / repeat
-            print("%7.3f msecs (%s)" % (msecs, layer))
+            neon_logger.display("%7.3f msecs (%s)" % (msecs, layer))
 
 
     def roipooling_fprop(self, I, rois, O, argmax, roi_count, fm_channel, fm_height, fm_width,
                             pooled_height, pooled_width, spatial_scale):
         """
-        Function to perform fprop of ROIPooling
+        Function to perform fprop of ROIPooling.
 
         Arguments:
             I (Tensor): (C, H, W, N)
@@ -1968,7 +2214,7 @@ class NervanaGPU(Backend):
         assert argmax.dtype == np.int32
 
         def get_blocks(N, thread):
-            return (N + thread - 1) / thread
+            return (N + thread - 1) // thread
 
         layer_dtype = I.dtype
 
@@ -1985,7 +2231,7 @@ class NervanaGPU(Backend):
     def roipooling_bprop(self, I, rois, O, argmax, roi_count, fm_channel, fm_height, fm_width,
                             pooled_height, pooled_width, spatial_scale):
         """
-        Function to perform bprop of ROIPooling
+        Function to perform bprop of ROIPooling.
 
         Arguments:
             I (Tensor): input errors (C, pooled_height, pooled_width, roi_count)
@@ -2003,7 +2249,7 @@ class NervanaGPU(Backend):
         assert argmax.dtype == np.int32
 
         def get_blocks(N, thread):
-            return (N + thread - 1) / thread
+            return (N + thread - 1) // thread
 
         layer_dtype = I.dtype
 
@@ -2042,8 +2288,8 @@ class NervanaGPU(Backend):
         """
         assert xsum.dtype.type is np.float32
 
-        K = x.shape[0]
-        N = x.shape[1]
+        K = int(x.shape[0])
+        N = int(x.shape[1])
 
         if threads is None:
             if N <= 8192:
@@ -2066,28 +2312,31 @@ class NervanaGPU(Backend):
 
         kernel = _get_bn_fprop_kernel(x.dtype.str[1:], threads, self.compute_capability)
 
-        self._execute_bn(kernel, params, repeat, x.nbytes*2, N)
+        self._execute_bn(kernel, params, repeat, x.nbytes * 2, N)
 
     def compound_bprop_bn(self, delta_out, grad_gamma, grad_beta, delta_in,
                           x, xsum, xvar,
                           gamma, eps, threads=None, repeat=1):
         """
-        delta_out (Tensor): Delta buffer (where to write the output deltas)
-        grad_gamma (Tensor): Gradient w.r.t. gamma
-        grad_beta (Tensor): Gradient w.r.t. beta
-        delta_in (Tensor): Delta buffer (where to get the input deltas)
-        x (Tensor): feedforward input
-        xsum (Tensor): Batch sum over PQN dimension
-        xvar (Tensor): Batch variance
-        gamma (Tensor): scale parameter
-        eps (float): constant for numerical stability
-        threads (int): Number of GPU threads
-        repeat (int): Repeats for benchmarking
+        Function to perform batch normalization forward pass.
+
+        Arguments:
+            delta_out (Tensor): Delta buffer (where to write the output deltas)
+            grad_gamma (Tensor): Gradient w.r.t. gamma
+            grad_beta (Tensor): Gradient w.r.t. beta
+            delta_in (Tensor): Delta buffer (where to get the input deltas)
+            x (Tensor): feedforward input
+            xsum (Tensor): Batch sum over PQN dimension
+            xvar (Tensor): Batch variance
+            gamma (Tensor): scale parameter
+            eps (float): constant for numerical stability
+            threads (int): Number of GPU threads
+           repeat (int): Repeats for benchmarking
         """
         assert xsum.dtype.type is np.float32, "xsum should be fp32"
 
-        K = x.shape[0]
-        N = x.shape[1]
+        K = int(x.shape[0])
+        N = int(x.shape[1])
 
         if threads is None:
             if N <= 8192:
@@ -2103,7 +2352,7 @@ class NervanaGPU(Backend):
 
         kernel = _get_bn_bprop_kernel(x.dtype.str[1:], threads, self.compute_capability)
 
-        self._execute_bn(kernel, params, repeat, x.nbytes*4, N)
+        self._execute_bn(kernel, params, repeat, x.nbytes * 4, N)
 
     def _execute_bn(self, kernel, params, repeat, size, N):
 
@@ -2127,7 +2376,7 @@ class NervanaGPU(Backend):
             blocks = params[0][0]
             threads = params[1][0]
             occup = blocks * threads / (128.0 * _get_sm_count())
-            print("%7.3f msecs %4.0f GBps %s(%d,%d,%d) %.1f" %
+            neon_logger.display("%7.3f msecs %4.0f GBps %s(%d,%d,%d) %.1f" %
                   (msecs, bandwidth, kernel.name, blocks, N, threads, occup))
 
 
@@ -2136,12 +2385,12 @@ class NervanaGPU(Backend):
         Backward propagate lookup table layer.
 
         Arguments:
-            nin (integer): Number of input word_ids.
+            nin (int): Number of input word_ids.
             inputs (Tensor): Input tensor.
             error (Tensor): Error tensor.
             error_t (Tensor): Transposed error tensor.
             dW (Tensor): Gradient tensor (delta).
-            pad_idx (integer):
+            pad_idx (int):
             alpha (float):
             beta (float):
         """
@@ -2161,13 +2410,13 @@ class NervanaGPU(Backend):
             for kernel_id in range(5):
                 threads = 512
                 if kernel_id in [1, 3]:
-                    blocks = vocab_size / (threads * 2)
+                    blocks = vocab_size // (threads * 2)
                     if vocab_size % (threads * 2):
                         blocks = blocks + 1
                 elif kernel_id == 2:
                     blocks = 1
                 else:
-                    blocks = error.shape[1] / threads
+                    blocks = error.shape[1] // threads
                     if error.shape[1] % threads:
                         blocks = blocks + 1
 
@@ -2198,6 +2447,359 @@ class NervanaGPU(Backend):
 
             kernel = _get_lut_bprop_kernel(error.dtype.str[1:])
             kernel.prepared_async_call(*params)
+
+    def compound_rnn_unroll_fprop(self, W_recur, h_prev_s, h_ff_s, h_s, bias,
+                                  nout, num_steps, num_used_steps, activation,
+                                  reverse=False):
+        """
+        Time step unrolling portion of recurrent layer fprop.
+
+        Arguments:
+            W_recur (Tensor): Recurrent weight matrix.
+            h_prev_s (Array): Array of per time step hidden state tensors. Each
+                element in the array is a single time step view into one tensor
+                containing all of the time steps in sequence.
+            h_ff_s (Array): Array of per time step hidden state tensors. Each
+                element in the array is a single time step view into one tensor
+                containing all of the time steps in sequence.
+            h_s (Array): Array of per time step hidden state tensors. Each
+                element in the array is a single time step view into one tensor
+                containing all of the time steps in sequence.
+            bias (Tensor): Bias tensor to add at each time step.
+            nout (integer): Number of output units for the layer.
+            num_steps (integer): Total number of time steps in the buffer.
+            num_used_steps (integer): Number of time steps being used for real
+                data.
+            activation (Transform): Activation function for the layer.
+            reverse (boolean): When true, unrolling will iterate over time steps
+                in reverse (for BiRNN).
+        """
+        if nout <= 1152 and self.bsz == 4 and (nout % 48) == 0:
+            persistent_kernel = True
+            num_blocks = nout // 48
+        else:
+            persistent_kernel = False
+            num_blocks = (-(-h_s[0].shape[0] // 128)) * (-(-h_s[0].shape[1] // 32))
+            num_blocks = (-(-num_blocks // 4))
+
+        if (activation.classnm == 'Rectlinclip' and num_blocks <= self.sm_count and
+                not self.use_cudac_kernels):
+            if h_s[0].base is not h_ff_s[0].base:
+                if len(h_s[0].base.shape) == 3:
+                    assert ((h_ff_s[0].base.shape[1] + 2) == h_s[0].base.shape[1])
+                    h_buffer = h_s[0].base[:, 1:-1].reshape(nout, -1)
+                    h_ff_buffer = h_ff_s[0].base.reshape(nout, -1)
+                    h_buffer[:] = h_ff_buffer
+                else:
+                    h_s[0].base[:] = h_ff_s[0].base
+
+            if num_used_steps is not None and num_used_steps < num_steps:
+                num_steps = num_used_steps
+
+            if persistent_kernel:
+                self._persistent_rnn_fprop(W_recur, h_prev_s[0],
+                                           h_s[0], bias, nout, nout,
+                                           self.bsz, num_steps, activation,
+                                           reverse)
+            else:
+                self._compound_unrolled_gemm(W_recur, h_prev_s[0], h_s[0],
+                                             bias, nout, nout, self.bsz, num_steps,
+                                             activation, reverse)
+        else:
+            if num_used_steps is not None and num_used_steps < num_steps:
+                h_s = h_s[:num_used_steps]
+                h_prev_s = h_prev_s[:num_used_steps]
+                h_ff_s = h_ff_s[:num_used_steps]
+
+            if reverse:
+                steps = reversed(list(zip(h_s, h_prev_s, h_ff_s)))
+            else:
+                steps = list(zip(h_s, h_prev_s, h_ff_s))
+
+            for (h, h_prev, h_ff) in steps:
+                if h_ff is h:
+                    self.compound_dot(W_recur, h_prev, h, beta=1.0)
+                    h[:] = activation(h + bias)
+                else:
+                    self.compound_dot(W_recur, h_prev, h)
+                    h[:] = activation(h + h_ff + bias)
+
+    def compound_rnn_unroll_bprop(self, W_recur, delta_prev_s, delta_s, h_s,
+                                  nout, num_steps, num_used_steps, activation,
+                                  reverse=True):
+        """
+        Time step unrolling portion of recurrent layer bprop.
+
+        Arguments:
+            W_recur (Tensor): Recurrent weight matrix.
+            delta_prev_s (Array): Array of per time step input delta tensors.
+                Each element in the array is a single time step view into one
+                tensor containing all of the time steps in sequence.
+            delta_s (Array): Array of per time step input delta tensors.
+                Each element in the array is a single time step view into one
+                tensor containing all of the time steps in sequence.
+            h_s (Tensor): Array of per time step hidden state tensors. Each
+                element in the array is a single time step view into one tensor
+                containing all of the time steps in sequence.
+            nout (integer): Number of output units for the layer.
+            num_steps (integer): Total number of time steps in the buffer.
+            num_used_steps (integer): Number of time steps being used for real
+                data.
+            activation (Transform): Activation function for the layer.
+            reverse (boolean): When true, unrolling will iterate over time steps
+                in reverse (default case for RNN).
+        """
+        if nout <= 1152 and self.bsz == 4 and (nout % 48) == 0:
+            persistent_kernel = True
+            num_blocks = nout // 48
+        else:
+            persistent_kernel = False
+            num_blocks = (-(-delta_s[0].shape[0] // 128)) * (-(-delta_s[0].shape[1] // 32))
+            num_blocks = (-(-num_blocks // 4))
+
+        if (activation.classnm == 'Rectlinclip' and num_blocks <= self.sm_count and
+                not self.use_cudac_kernels):
+            # Compute activation bprop for first timestep since there is
+            # no compounded GEMM
+            if reverse:
+                delta_s[-1][:] = activation.bprop(h_s[-1]) * delta_s[-1]
+            else:
+                delta_s[0][:] = activation.bprop(h_s[0]) * delta_s[0]
+
+            if num_used_steps is not None and num_used_steps < num_steps:
+                num_steps = num_used_steps
+
+            if reverse:
+                B = delta_s[1]
+                C = delta_s[0]
+                H = h_s[0]
+            else:
+                B = delta_s[0]
+                C = delta_s[1]
+                H = h_s[1]
+
+            if persistent_kernel:
+                self._persistent_rnn_bprop(W_recur, B, C, H, nout, nout,
+                                           self.bsz, num_steps - 1, activation,
+                                           reverse)
+            else:
+                self._compound_unrolled_gemm_bprop(W_recur, B, C, H, nout, nout,
+                                                   self.bsz, num_steps - 1,
+                                                   activation, reverse)
+
+            if reverse:
+                self.compound_dot(W_recur, delta_s[0], delta_s[-1], beta=1.0)
+            else:
+                self.compound_dot(W_recur, delta_s[-1], delta_s[0], beta=1.0)
+        else:
+            if num_used_steps is not None and num_used_steps < num_steps:
+                h_s = h_s[:num_used_steps]
+                h_prev_s = h_prev_s[:num_used_steps]
+                h_ff_s = h_ff_s[:num_used_steps]
+
+            if reverse:
+                steps = reversed(list(zip(h_s, delta_s, delta_prev_s)))
+            else:
+                steps = list(zip(h_s, delta_s, delta_prev_s))
+
+            for (hs, in_deltas, prev_in_deltas) in steps:
+                in_deltas[:] = activation.bprop(hs) * in_deltas
+                self.compound_dot(W_recur, in_deltas, prev_in_deltas, beta=1.0)
+
+    def _persistent_rnn_fprop(self, W, hprev, h, bias, nin, nout, unroll_stride,
+                             num_steps, activation, reverse=False):
+        assert W.dtype.type == h.dtype.type == bias.dtype.type
+        assert activation.classnm == 'Rectlinclip'
+
+        gpulock = _get_lock_data(4 * num_steps)
+        drv.memset_d32_async(gpulock, 0, num_steps, self.stream)
+
+        # one dimension must be contiguous
+        assert min(h.strides) == 1
+        assert min(hprev.strides) == 1
+        assert min(W.strides) == 1
+
+        reluclip = activation.xcut
+        param_reverse = 1 if reverse else 0
+        num_blocks = -(-nout // 48)
+
+        kernel = kernel_specs.get_kernel("persistent_rnn_fprop")
+        params = [
+            (num_blocks, 1, 1), (kernel.threads, 1, 1), self.stream,
+            h.gpudata, hprev.gpudata, bias.gpudata, W.gpudata, gpulock,
+            h.strides[0] // 4, W.strides[0], self.bsz, num_steps, num_blocks,
+            nout, param_reverse, reluclip]
+
+        kernel.prepared_async_call(*params)
+
+    def _persistent_rnn_bprop(self, W, dnext, d, h, nin, nout, unroll_stride,
+                             num_steps, activation, reverse=False):
+        assert W.dtype.type == h.dtype.type == d.dtype.type
+        assert activation.classnm == 'Rectlinclip'
+
+        gpulock = _get_lock_data(4 * num_steps)
+        drv.memset_d32_async(gpulock, 0, num_steps, self.stream)
+
+        # one dimension must be contiguous
+        assert min(h.strides) == 1
+        assert min(d.strides) == 1
+        assert min(W.strides) == 1
+
+        reluclip = activation.xcut
+        param_reverse = 1 if reverse else 0
+        num_blocks = -(-nout // 48)
+
+        kernel = kernel_specs.get_kernel("persistent_rnn_bprop")
+        params = [
+            (num_blocks, 1, 1), (kernel.threads, 1, 1), self.stream,
+            d.gpudata, dnext.gpudata, h.gpudata, W.gpudata, gpulock,
+            d.strides[0] // 4, h.strides[0] // 4, W.strides[1], self.bsz,
+            num_steps, num_blocks, nout, param_reverse, reluclip]
+
+        kernel.prepared_async_call(*params)
+
+    def _compound_unrolled_gemm(self, A, B, C, bias, nin, nout, unroll_stride, num_steps, activation,
+                               reverse=False):
+        assert A.dtype.type == B.dtype.type == C.dtype.type
+        assert activation.classnm == 'Rectlinclip'
+
+        gpulock = _get_lock_data(4)
+        drv.memset_d32_async(gpulock, 0, 1, self.stream)
+
+        # one dimension must be contiguous
+        assert min(A.strides) == 1
+        assert min(B.strides) == 1
+        assert min(C.strides) == 1
+
+        lda = max(A.strides)
+        ldb = max(B.strides)
+        ldc = max(C.strides)
+
+        if A.is_trans:
+            opA = 't'
+            lda *= 8 * A.dtype.itemsize  # saves a kernel register
+        else:
+            opA = 'n'
+
+        if B.is_trans:
+            opB = 't'
+        else:
+            opB = 'n'
+            ldb *= 8 * B.dtype.itemsize  # saves a kernel register
+
+        op = opA + opB
+        # NOTE: Only nn supported now
+        assert op == "nn"
+
+        m = nout
+        n = unroll_stride
+        k = nin
+
+        # NOTE: Only 128x32 supported now
+        sizeA = 128
+        sizeB = 32
+
+        gridA = m // sizeA + (m % sizeA != 0)
+        gridB = n // sizeB + (n % sizeB != 0)
+
+        if op == "nn":
+            if (k % 8 == 0 and n % 4 == 0 and
+                A.strides[0] % 8 == 0 and B.strides[0] % 4 == 0):
+                op += "_vec"
+
+        op = "sgemm_rnn_" + op + '_' + str(sizeA) + 'x' + str(sizeB)
+
+        # Since the kernel uses inter-block synchronization, ensure that we don't
+        # have more blocks than can run concurrently
+        assert (gridA * gridB) < (4 * _get_sm_count())
+
+        if reverse:
+            flags = 4
+        else:
+            flags = 0
+
+        kernel = kernel_specs.get_kernel(op)
+        params = [
+            (1, gridA, gridB), (kernel.threads, 1, 1), self.stream,
+            C.gpudata, A.gpudata, B.gpudata, bias.gpudata, gpulock,
+            1.0, 1.0, activation.xcut, flags,
+            lda, ldb, ldc, m, n, k,
+            0, 0, 0, 0, unroll_stride, unroll_stride, num_steps, gridA * gridB, gridA]
+
+        kernel.prepared_async_call(*params)
+
+    def _compound_unrolled_gemm_bprop(self, A, B, C, H, nin, nout, unroll_stride, num_steps, activation,
+                               reverse=False):
+        assert A.dtype.type == B.dtype.type == C.dtype.type
+        assert activation.classnm == 'Rectlinclip'
+
+        gpulock = _get_lock_data(4)
+        drv.memset_d32_async(gpulock, 0, 1, self.stream)
+
+        # one dimension must be contiguous
+        assert min(A.strides) == 1
+        assert min(B.strides) == 1
+        assert min(C.strides) == 1
+        assert min(H.strides) == 1
+
+        lda = max(A.strides)
+        ldb = max(B.strides)
+        ldc = max(C.strides)
+        ldh = max(H.strides)
+
+        if A.is_trans:
+            opA = 't'
+            lda *= 8 * A.dtype.itemsize  # saves a kernel register
+        else:
+            opA = 'n'
+
+        if B.is_trans:
+            opB = 't'
+        else:
+            opB = 'n'
+            ldb *= 8 * B.dtype.itemsize  # saves a kernel register
+
+        op = opA + opB
+        # NOTE: Only tn supported now
+        assert op == "tn"
+
+        m = nout
+        n = unroll_stride
+        k = nin
+
+        # NOTE: Only 128x32 supported now
+        sizeA = 128
+        sizeB = 32
+
+        gridA = m // sizeA + (m % sizeA != 0)
+        gridB = n // sizeB + (n % sizeB != 0)
+
+        if op == "tn":
+            if (m % 4 == 0 and n % 4 == 0 and
+                A.strides[1] % 4 == 0 and B.strides[0] % 4 == 0):
+                op += "_vec"
+
+        op = "sgemm_rnn_bprop_" + op + '_' + str(sizeA) + 'x' + str(sizeB)
+
+        # Since the kernel uses inter-block synchronization, ensure that we don't
+        # have more blocks than can run concurrently
+        assert (gridA * gridB) < (4 * _get_sm_count())
+
+        if reverse:
+            flags = 4
+        else:
+            flags = 0
+
+        kernel = kernel_specs.get_kernel(op)
+        params = [
+            (1, gridA, gridB), (kernel.threads, 1, 1), self.stream,
+            C.gpudata, A.gpudata, B.gpudata, H.gpudata,
+            gpulock, 1.0, 1.0, activation.xcut, flags,
+            lda, ldb, ldc, ldh, m, n, k,
+            0, 0, 0, 0, unroll_stride, unroll_stride, unroll_stride, num_steps,
+            gridA * gridB, gridA]
+
+        kernel.prepared_async_call(*params)
 
     def cublas_dot(self, A, B, C, alpha=1.0, beta=0.0):
         """
@@ -2262,11 +2864,11 @@ class NervanaGPU(Backend):
         assert a.gpudata != out.gpudata
 
         if axes is None:
-            axes = tuple(range(len(a.shape)-1,-1,-1))
+            axes = tuple(range(len(a.shape) - 1,-1,-1))
         elif type(axes) is not tuple:
             axes = tuple(axes)
 
-        assert all(out.shape[i]==a.shape[x] for i,x in enumerate(axes))
+        assert all(out.shape[i] == a.shape[x] for i,x in enumerate(axes))
 
         from neon.backends.convolution import _get_copy_transpose_kernel
 
@@ -2292,12 +2894,12 @@ class NervanaGPU(Backend):
             end.record(self.stream)
             end.synchronize()
             msecs = end.time_since(start) / repeat
-            bandwidth = a.nbytes*2 / (msecs * 1024 * 1024)
-            print("%7.3f msecs %4.0f GBps copy_transpose" % (msecs, bandwidth))
+            bandwidth = a.nbytes * 2 / (msecs * 1024 * 1024)
+            neon_logger.display("%7.3f msecs %4.0f GBps copy_transpose" % (msecs, bandwidth))
 
     def init_mark(self):
         """
-        Generate a timing mark object
+        Generate a timing mark object.
 
         Returns:
             timing mark (pycude driver event)
@@ -2306,7 +2908,7 @@ class NervanaGPU(Backend):
 
     def record_mark(self, marker):
         """
-        Mark the current time
+        Mark the current time.
 
         Arguments:
             marker (time mark): timing mark generated by init_mark()
@@ -2315,7 +2917,7 @@ class NervanaGPU(Backend):
 
     def synchronize_mark(self, marker):
         """
-        Synchronize on the given marker
+        Synchronize on the given marker.
 
         Arguments:
             marker (time mark): timing mark generated by init_mark()
@@ -2324,7 +2926,7 @@ class NervanaGPU(Backend):
 
     def get_time(self, start, end):
         """
-        Return time between start and end marks
+        Return time between start and end marks.
 
         Arguments:
             start (time maker): start time mark
@@ -2347,10 +2949,40 @@ def _contiguous_strides(shape):
     else:
         return ()
 
+def _reshape_strides(orig_strides, orig_shape, new_shape):
+    # Only contiguous dimensions can be reshaped
+    matched_dims = 0
+    for orig, new in zip(orig_shape, new_shape):
+        if orig != new:
+            break
+        else:
+            matched_dims = matched_dims + 1
+
+    # Extend original shape to length of new shape
+    orig_shape = tuple(list(orig_shape) + [1] * (len(new_shape) - len(orig_shape)))
+    orig_strides = tuple(list(orig_strides) + [1] * (len(new_shape) - len(orig_strides)))
+
+    reshape_size = np.prod(new_shape[matched_dims:])
+    orig_size = np.prod(orig_strides[matched_dims]) * orig_shape[matched_dims]
+
+    if orig_size != reshape_size:
+        raise ValueError("Reshaping of non-contiguous dimensions unsupported.")
+
+    new_strides = orig_strides[:matched_dims] + _contiguous_strides(new_shape[matched_dims:])
+    return new_strides
 
 @context_dependent_memoize
 def _get_scratch_data(scratch_size):
     return drv.mem_alloc(scratch_size)
+
+def _reset_scratch_data():
+    try:
+        delattr(_get_scratch_data.__wrapped__, '_pycuda_ctx_dep_memoize_dic')
+    except AttributeError:
+        pass
+@context_dependent_memoize
+def _get_lock_data(lock_size):
+    return drv.mem_alloc(lock_size)
 
 
 @context_dependent_memoize
@@ -2369,3 +3001,4 @@ def _get_events():
 #             break
 #         caller = (frame[0],frame[1])
 #     print caller
+

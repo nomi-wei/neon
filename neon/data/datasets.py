@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2014 Nervana Systems Inc.
+# Copyright 2014-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -15,14 +15,18 @@
 """
 Functions used to load commonly available datasets.
 """
+from __future__ import division
+from future import standard_library
+standard_library.install_aliases()  # triggers E402, hence noqa below
+from future.moves.urllib.request import Request, urlopen  # noqa
 
-import logging
-import os
-import sys
-import urllib2
-import zipfile
+import logging  # noqa
+import os  # noqa
+import sys  # noqa
+import zipfile  # noqa
 
-from neon import NervanaObject
+from neon import NervanaObject, logger as neon_logger  # noqa
+from neon.util.compat import PY3  # noqa
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +128,10 @@ class Dataset(NervanaObject):
             destfile (str): Path to the destination.
             totalsz (int): Size of the file to be downloaded.
         """
-        cloudfile = urllib2.urlopen(os.path.join(url, sourcefile))
-        print("Downloading file: {}".format(destfile))
+        req = Request(os.path.join(url, sourcefile), headers={'User-Agent': 'neon'})
+        # backport https limitation and workaround per http://python-future.org/imports.html
+        cloudfile = urlopen(req)
+        neon_logger.display("Downloading file: {}".format(destfile))
         blockchar = u'\u2588'  # character to display in progress bar
         with open(destfile, 'wb') as f:
             data_read = 0
@@ -138,11 +144,14 @@ class Dataset(NervanaObject):
                 progress_string = u'Download Progress |{:<50}| '.format(
                     blockchar * int(float(data_read) / totalsz * 50))
                 sys.stdout.write('\r')
-                sys.stdout.write(progress_string.encode('utf-8'))
+                if PY3:
+                    sys.stdout.write(progress_string)
+                else:
+                    sys.stdout.write(progress_string.encode("utf-8"))
                 sys.stdout.flush()
 
                 f.write(data)
-            print("Download Complete")
+            neon_logger.display("Download Complete")
 
     def gen_iterators(self):
         # children of this class will need to implement this method
@@ -169,48 +178,72 @@ class I1Kmeta(Dataset):
 
 # functions below are deprecated and will be removed in a future release
 def load_i1kmeta(path):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_i1kmeta  # noqa
     return load_i1kmeta(path)
 
 
 def _valid_path_append(path, *args):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import _valid_path_append  # noqa
     return _valid_path_append(path, *args)
 
 
 def fetch_dataset(url, sourcefile, destfile, totalsz):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import fetch_dataset  # noqa
     return fetch_dataset(url, sourcefile, destfile, totalsz)
 
 
 def load_mnist(path=".", normalize=True):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_mnist  # noqa
     return load_mnist(path=path, normalize=normalize)
 
 
 def _compute_zca_transform(imgs, filter_bias=0.1):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import _compute_zca_transform  # noqa
     return _compute_zca_transform(imgs, filter_bias=filter_bias)
 
 
 def zca_whiten(train, test, cache=None):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import zca_whiten  # noqa
     return zca_whiten(train, test, cache=cache)
 
 
 def global_contrast_normalize(X, scale=1., min_divisor=1e-8):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import global_contrast_normalize
     return global_contrast_normalize(X, scale=scale, min_divisor=min_divisor)
 
 
 def load_cifar10(path=".", normalize=True, contrast_normalize=False, whiten=False):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_cifar10  # noqa
     return load_cifar10(path=path,
@@ -220,65 +253,98 @@ def load_cifar10(path=".", normalize=True, contrast_normalize=False, whiten=Fals
 
 
 def load_babi(path=".", task='qa1_single-supporting-fact', subset='en'):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     raise NotImplemented('load_babi has been removed')
 
 
 def load_ptb_train(path):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_ptb_train  # noqa
     return load_ptb_train(path)
 
 
 def load_ptb_valid(path):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_ptb_valid  # noqa
     return load_ptb_valid(path)
 
 
 def load_ptb_test(path):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_ptb_test  # noqa
     return load_ptb_test(path)
 
 
 def load_hutter_prize(path):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_hutter_prize  # noqa
     return load_hutter_prize(path)
 
 
 def load_shakespeare(path):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_shakespeare  # noqa
     return load_shakespeare(path)
 
 
 def load_flickr8k(path):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_flickr8k  # noqa
     return load_flickr8k(path)
 
 
 def load_flickr30k(path):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_flickr30k  # noqa
     return load_flickr30k(path)
 
 
 def load_coco(path):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_coco  # noqa
     return load_coco(path)
 
 
 def load_imdb(path):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_imdb  # noqa
     return load_imdb(path)
 
 
 def load_text(dataset, path="."):
+    """
+    Deprecated, moved to neon.data.dataloaders.
+    """
     logger.error('This function has moved, import from neon.data.dataloaders')
     from neon.data.dataloaders import load_text  # noqa
     return load_text(dataset, path=path)

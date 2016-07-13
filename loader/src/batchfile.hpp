@@ -32,14 +32,14 @@
 using std::string;
 using std::stringstream;
 using std::unique_ptr;
+using std::ignore;
 
 typedef std::vector<string> LineList;
 typedef std::vector<char> ByteVect;
 typedef std::pair<unique_ptr<ByteVect>,unique_ptr<ByteVect>> DataPair;
 
-static_assert(sizeof(int) == 4, "int is not 4 bytes");
-static_assert(sizeof(uint) == 4, "uint is not 4 bytes");
-static_assert(sizeof(short) == 2, "short is not 2 bytes");
+static_assert(sizeof(int) == 4, "Unsupported platform");
+static_assert(sizeof(short) == 2, "Unsupported platform");
 
 /*
 
@@ -276,14 +276,19 @@ public:
         }
     }
 
-    void readItem(BufferPair& buffers) {
+    void readItem(BufferTuple& buffers) {
         uint datumSize;
         uint targetSize;
         _recordHeader.read(_ifs, &datumSize);
-        buffers.first->read(_ifs, datumSize);
+
+        CharBuffer* data;
+        CharBuffer* targets;
+        tie(data, targets, ignore) = buffers;
+        data->read(_ifs, datumSize);
+
         _ifs.readPadding(datumSize);
         _recordHeader.read(_ifs, &targetSize);
-        buffers.second->read(_ifs, targetSize);
+        targets->read(_ifs, targetSize);
         _ifs.readPadding(targetSize);
     }
 

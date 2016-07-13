@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -15,13 +15,16 @@
 """
 Defines PASCAL_VOC datatset handling.
 """
+from __future__ import division
+from builtins import str, zip
 import numpy as np
 import os
 import xml.dom.minidom as minidom
 import tarfile
 from PIL import Image
-
+from neon import logger as neon_logger
 from neon.data.datasets import Dataset
+from neon.util.compat import xrange
 from neon.util.persist import save_obj, load_obj
 
 # background class is always indexed at 0
@@ -74,12 +77,12 @@ class PASCALVOC(Dataset):
     A base class for PASCAL VOC dataset object.
     Contains variables and functions that both training and testing dataset can use.
 
-    The structure of VOC is:
+    The structure of VOC is
         $VOC_ROOT: path/VOCdevkit/VOC2007
         $VOC_ROOT/ImageSet/Main/train.txt (or test.txt etc.): image index file
-        $VOC_ROOT/Annotations/*.xml: classes and bb for each image
+        $VOC_ROOT/Annotations/\*.xml: classes and bb for each image
 
-    Args:
+    Arguments:
         image_set (str) : 'trainval' or 'test'
         year (String) : e.g. '2007'
         path (String) : Path to data file
@@ -103,12 +106,12 @@ class PASCALVOC(Dataset):
 
         self.cache_file_name = self.get_cache_file_name()
 
-        print self.get_dataset_msg()
+        neon_logger.display(self.get_dataset_msg())
 
         # PASCAL class to index
         self.num_classes = PASCAL_VOC_NUM_CLASSES
         self._class_to_index = dict(
-            zip(PASCAL_VOC_CLASSES, xrange(self.num_classes)))
+            list(zip(PASCAL_VOC_CLASSES, xrange(self.num_classes))))
 
         # load the voc dataset
         self.voc_root = self.load_voc(image_set, year, path)
@@ -142,8 +145,8 @@ class PASCALVOC(Dataset):
         # self.rois_per_batch is 128 (2*64) ROIs
         # But the image path batch size is self.img_per_batch
         # need to control the batch size here
-        print "Backend batchsize is changed to be {} from PASCAL_VOC dataset".format(
-            self.img_per_batch)
+        neon_logger.display("Backend batchsize is changed to be {} from PASCAL_VOC dataset".format(
+            self.img_per_batch))
 
         self.be.bsz = self.img_per_batch
 
@@ -167,6 +170,14 @@ class PASCALVOC(Dataset):
         Fetch the pre-computed selective search data which are converted from
         the MAT files available from
         http://www.cs.berkeley.edu/~rbg/fast-rcnn-data/selective_search_data.tgz
+
+        Arguments:
+            dataset:
+            year:  (Default value = None)
+            path:  (Default value = ".")
+
+        Returns:
+
         """
         dataset = 'selective-search' if year is None else '-'.join(
             [dataset, year])
@@ -183,7 +194,7 @@ class PASCALVOC(Dataset):
 
     def load_pascal_roi_groundtruth(self):
         """
-        load the voc database ground truth ROIs
+        Load the VOC database ground truth ROIs.
         """
 
         return [self.load_pascal_annotation(img) for img in self.image_index]
@@ -253,43 +264,48 @@ class PASCALVOC(Dataset):
 class PASCALVOCTrain(PASCALVOC):
 
     """
-    Construct a PASCAL VOC dataset object for training
-    It will also load precomputed selective search results as ROIs.
+    PASCAL VOC 2007 and 2012 data set for training from
+    http://host.robots.ox.ac.uk/pascal/VOC/voc2007/index.html and
+    http://host.robots.ox.ac.uk/pascal/VOC/voc2012/index.html.
+    Construct a PASCAL VOC dataset object for training and load precomputed
+    selective search results as ROIs.
 
-    The structure of VOC is:
+    The structure of VOC is
         $VOC_ROOT: path/VOCdevkit/VOC2007
         $VOC_ROOT/ImageSet/Main/train.txt (or test.txt etc.): image index file
         $VOC_ROOT/Annotations/*.xml: classes and bb for each image
 
     Notes:
         1. ground truth bounding rp are 1-based pixel coordinates, need to
-            make it 0-based for input data
-        2. bounding box coordinate: (x_min, y_min, x_max, y_max)
+           make it 0-based for input data.
+        2. bounding box coordinate: (x_min, y_min, x_max, y_max).
         3. the preprocessed data will be saved into a cached file and re-use
-            if the same configuration is chosen
+           if the same configuration is chosen.
 
-    Args:
+    Arguments:
         image_set (str) : 'trainval' or 'test'
-        year (String) : e.g. '2007'
-        path (String) : Path to data file
-        add_flipped (Bool) : whether to augment the dataset with flipped images
-        overlap_thre (Float): the IOU threshold of bbox to be used for training
-        output_type (Int, optional): the type of data iterator will yield, to
-                                     provide data for FRCN or its variants
+        year (str) : e.g. '2007'
+        path (str) : Path to data file
+        add_flipped (bool) : whether to augment the dataset with flipped images
+        overlap_thre (float): the IOU threshold of bbox to be used for training
+        output_type (int, optional): the type of data iterator will yield, to
+                    provide data for FRCN or its variants
                     0 (normal FRCN model) -- X: (image, rois) Y: (labels, (bb targets,bb mask))
                     1 (label stream with ROI) -- X: (image, rois) Y: (labels)
                     2 (label stream no ROI) -- X: image Y: labels
-        n_mb (Int, optional): how many minibatch to iterate through, can use
+        n_mb (int, optional): how many minibatch to iterate through, can use
                               value smaller than nbatches for debugging
-        img_per_batch (Int, optional): how many images processed per batch
-        rois_per_img (Int, optional): how many rois to pool from each image
-        rois_random_sample  (Bool, optional): randomly sample the ROIs. Default
+        img_per_batch (int, optional): how many images processed per batch
+        rois_per_img (int, optional): how many rois to pool from each image
+        rois_random_sample  (bool, optional): randomly sample the ROIs. Default
                                               to be true. So although each image
                                               has many ROIs, only some are randomly
                                               sample for training. When set to False,
                                               it will just take the first rois_per_img
                                               for training
-        shuffle(Bool, optional): randomly shuffle the samples in each epoch
+        shuffle(bool, optional): randomly shuffle the samples in each epoch
+        subset_pct (float, optional): value between 0 and 100 indicating what percentage of the
+                                      dataset partition to use.  Defaults to 100
         """
     # how many percentage should sample from the foreground obj
     FRCN_FG_FRAC = 0.25
@@ -306,7 +322,7 @@ class PASCALVOCTrain(PASCALVOC):
 
     def __init__(self, image_set, year, path='.', add_flipped=False,
                  overlap_thre=None, output_type=0, n_mb=None, img_per_batch=None,
-                 rois_per_img=None, rois_random_sample=True, shuffle=False):
+                 rois_per_img=None, rois_random_sample=True, shuffle=False, subset_pct=100):
 
         self.add_flipped = add_flipped
         self.overlap_thre = overlap_thre if overlap_thre else self.FRCN_IOU_THRE
@@ -333,6 +349,8 @@ class PASCALVOCTrain(PASCALVOC):
             (1, self.rois_per_batch), dtype=np.int32)
         self.dev_y_labels = self.be.zeros(
             (self.num_classes, self.rois_per_batch), dtype=np.int32)
+        self.dev_y_labels_mask = self.be.zeros_like(self.dev_y_labels)
+
         self.dev_y_bbtargets = self.be.zeros(
             (self.num_classes * 4, self.rois_per_batch))
         self.dev_y_bbmask = self.be.zeros(
@@ -362,7 +380,8 @@ class PASCALVOCTrain(PASCALVOC):
         self.num_images = len(self.image_index)
         self.num_image_entries = self.num_images * 2 if self.add_flipped else self.num_images
         self.ndata = self.num_image_entries * self.rois_per_img
-        self.nbatches = self.num_image_entries/self.img_per_batch
+        assert (subset_pct > 0 and subset_pct <= 100), ('subset_pct must be between 0 and 100')
+        self.nbatches = int(self.num_image_entries / self.img_per_batch * subset_pct / 100)
 
         if n_mb is not None:
             self.nbatches = n_mb
@@ -372,7 +391,7 @@ class PASCALVOCTrain(PASCALVOC):
             self.roi_db = cache_db['roi_db']
             self.bbtarget_means = cache_db['bbtarget_means']
             self.bbtarget_stds = cache_db['bbtarget_stds']
-            print 'ROI dataset loaded from file {}'.format(self.cache_file)
+            neon_logger.display('ROI dataset loaded from file {}'.format(self.cache_file))
         else:
             # 2.
             self.roi_gt = self.load_pascal_roi_groundtruth()
@@ -388,7 +407,7 @@ class PASCALVOCTrain(PASCALVOC):
             cache_db['bbtarget_means'] = self.bbtarget_means
             cache_db['bbtarget_stds'] = self.bbtarget_stds
             save_obj(cache_db, self.cache_file)
-            print 'wrote ROI dataset to {}'.format(self.cache_file)
+            neon_logger.display('wrote ROI dataset to {}'.format(self.cache_file))
 
     def __iter__(self):
         """
@@ -410,7 +429,7 @@ class PASCALVOCTrain(PASCALVOC):
 
         # permute the dataset each epoch
         if self.shuffle is False:
-            shuf_idx = range(self.num_image_entries)
+            shuf_idx = list(range(self.num_image_entries))
         else:
             shuf_idx = self.be.rng.permutation(self.num_image_entries)
             self.image_index = [self.image_index[i] for i in shuf_idx]
@@ -425,6 +444,7 @@ class PASCALVOCTrain(PASCALVOC):
 
             rois_mb = np.zeros((self.rois_per_batch, 5), dtype=np.float32)
             labels_blob = np.zeros((self.rois_per_batch), dtype=np.int32)
+            labels_mask_blob = np.zeros((self.num_classes, self.rois_per_batch), dtype=np.float32)
             bbox_targets_blob = np.zeros((self.rois_per_batch, 4 * self.num_classes),
                                          dtype=np.float32)
             bbox_loss_blob = np.zeros(
@@ -459,6 +479,7 @@ class PASCALVOCTrain(PASCALVOC):
                 # Add to RoIs blob
                 rois = im_rois * im_scale
                 num_rois_this_image = rois.shape[0]
+
                 slice_i = slice(im_i * self.rois_per_img,
                                 im_i * self.rois_per_img + num_rois_this_image)
                 batch_ind = im_i * np.ones((num_rois_this_image, 1))
@@ -470,6 +491,7 @@ class PASCALVOCTrain(PASCALVOC):
 
                 # Add to labels, bbox targets, and bbox loss blobs
                 labels_blob[slice_i] = labels.ravel()
+                labels_mask_blob[:, slice_i] = 1
                 bbox_targets_blob[slice_i] = bbox_targets
                 bbox_loss_blob[slice_i] = bbox_loss
 
@@ -480,15 +502,17 @@ class PASCALVOCTrain(PASCALVOC):
             self.dev_X_img_chw.set(self.img_np)
             self.dev_X_rois[:] = rois_mb
             self.dev_y_labels_flat[:] = labels_blob.reshape(1, -1)
-            self.dev_y_labels[:] = self.be.onehot(
-                self.dev_y_labels_flat, axis=0)
+            self.dev_y_labels[:] = self.be.onehot(self.dev_y_labels_flat, axis=0)
+            self.dev_y_labels_mask[:] = labels_mask_blob
+
             self.dev_y_bbtargets[:] = bbox_targets_blob.T.astype(
                 np.float, order='C')
             self.dev_y_bbmask[:] = bbox_loss_blob.T.astype(np.int32, order='C')
 
             if self.output_type == 0:
                 X = (self.dev_X_img, self.dev_X_rois)
-                Y = (self.dev_y_labels, (self.dev_y_bbtargets, self.dev_y_bbmask))
+                Y = ((self.dev_y_labels, self.dev_y_labels_mask),
+                     (self.dev_y_bbtargets, self.dev_y_bbmask))
             elif self.output_type == 1:
                 X = (self.dev_X_img, self.dev_X_rois)
                 Y = self.dev_y_labels
@@ -511,7 +535,7 @@ class PASCALVOCTrain(PASCALVOC):
 
     def get_dataset_msg(self):
         return 'prepare PASCAL VOC {} from year {}: add flipped image {} and overlap threshold {}'\
-                .format(self.image_set, self.year, self.add_flipped, self.overlap_thre)
+            .format(self.image_set, self.year, self.add_flipped, self.overlap_thre)
 
     def load_pascal_roi_selectivesearch(self):
         """
@@ -590,6 +614,7 @@ class PASCALVOCTrain(PASCALVOC):
         return roi_ss
 
     def combine_gt_ss_roi(self):
+        """ """
         assert len(self.roi_gt) == len(self.roi_ss) == self.num_images, \
             'ROIs from GT and SS do not match the dataset images'
 
@@ -602,6 +627,7 @@ class PASCALVOCTrain(PASCALVOC):
 
         for i in xrange(self.num_images):
             roi_gt_ss[i] = {}
+            roi_gt_ss[i]['num_gt'] = self.roi_gt[i]['gt_bb'].shape[0]
             roi_gt_ss[i]['bb'] = np.vstack((self.roi_gt[i]['gt_bb'],
                                             self.roi_ss[i]['ss_bb']))
             roi_gt_ss[i]['gt_classes'] = np.vstack((self.roi_gt[i]['gt_classes'],
@@ -715,32 +741,37 @@ class PASCALVOCTrain(PASCALVOC):
 class PASCALVOCInference(PASCALVOC):
 
     """
+    PASCAL VOC 2007 and 2012 data set for testing and inference from
+    http://host.robots.ox.ac.uk/pascal/VOC/voc2007/index.html and
+    http://host.robots.ox.ac.uk/pascal/VOC/voc2012/index.html.
     Construct a PASCAL VOC dataset object for testing and inference
     It still loads precomputed selective search results as ROIs.
 
     Notes:
         1. The dataset iterator will use only batch size 1.
         2. The inference/test dataset will keep all the precomputed selective
-            search to run through the model
+            search to run through the model.
         3. The preprocessed data will be saved into a cached file and re-use
-            if the same configuration is chosen
+            if the same configuration is chosen.
 
-    Args:
-        image_set (str) : 'trainval' or 'test'
-        year (String) : e.g. '2007'
-        path (String) : Path to data file
-        n_mb (Int, optional): how many minibatch to iterate through, can use
-                              value smaller than nbatches for debugging
-        img_per_batch (Int, optional): how many images processed per batch
-        rois_per_img (Int, optional): how many rois to pool from each image
-        im_fm_scale: (Float, optional): how much the image is scaled down when
+    Arguments:
+        image_set (str): 'trainval' or 'test'.
+        year (str): e.g. '2007'.
+        path (str): Path to data file.
+        n_mb (int, optional): how many minibatch to iterate through, can use
+                              value smaller than nbatches for debugging.
+        img_per_batch (int, optional): how many images processed per batch.
+        rois_per_img (int, optional): how many rois to pool from each image.
+        im_fm_scale: (float, optional): how much the image is scaled down when
                                         reaching the feature map layer. This scale
                                         is used to remove duplicated ROIs once they
                                         are projected to the feature map scale.
-        shuffle(Bool, optional): randomly shuffle the samples in each epoch
+        shuffle(bool, optional): randomly shuffle the samples in each epoch
                                  not used when doing testing for accuracy metric,
                                  but used when using this dataset iterator to do
-                                 demo, it can pick images randomly inside the dataset
+                                 demo, it can pick images randomly inside the dataset.
+        subset_pct (float, optional): value between 0 and 100 indicating what percentage of the
+                                      dataset partition to use.  Defaults to 100
     """
 
     FRCN_MIN_SCALE = 600
@@ -748,8 +779,8 @@ class PASCALVOCInference(PASCALVOC):
     FRCN_IMG_PER_BATCH = 1
     FRCN_ROI_PER_IMAGE = 5403
 
-    def __init__(self, image_set, year, path='.',
-                 n_mb=None, rois_per_img=None, im_fm_scale=1./16, shuffle=False):
+    def __init__(self, image_set, year, path='.', subset_pct=100,
+                 n_mb=None, rois_per_img=None, im_fm_scale=1. / 16, shuffle=False):
         super(PASCALVOCInference, self).__init__(image_set, year, path, n_mb,
                                                  self.FRCN_IMG_PER_BATCH, rois_per_img)
 
@@ -782,14 +813,15 @@ class PASCALVOCInference(PASCALVOC):
         self.num_images = len(self.image_index)
         self.num_image_entries = self.num_images
         self.ndata = self.num_image_entries * self.rois_per_img
-        self.nbatches = self.num_image_entries/self.img_per_batch
+        assert (subset_pct > 0 and subset_pct <= 100), ('subset_pct must be between 0 and 100')
+        self.nbatches = int(self.num_image_entries / self.img_per_batch * subset_pct / 100)
 
         if self.n_mb is not None:
             self.nbatches = self.n_mb
 
         if os.path.exists(self.cache_file):
             self.roi_db = load_obj(self.cache_file)
-            print 'ROI dataset loaded from file {}'.format(self.cache_file)
+            neon_logger.display('ROI dataset loaded from file {}'.format(self.cache_file))
         else:
             # 2.
             self.roi_gt = self.load_pascal_roi_groundtruth()
@@ -799,7 +831,7 @@ class PASCALVOCInference(PASCALVOC):
             self.roi_db = self.combine_gt_ss_roi()
 
             save_obj(self.roi_db, self.cache_file)
-            print 'wrote ROI dataset to {}'.format(self.cache_file)
+            neon_logger.display('wrote ROI dataset to {}'.format(self.cache_file))
 
     def __iter__(self):
         """
@@ -817,7 +849,7 @@ class PASCALVOCInference(PASCALVOC):
 
         # permute the dataset each epoch
         if self.shuffle is False:
-            shuf_idx = range(self.num_images)
+            shuf_idx = list(range(self.num_images))
         else:
             shuf_idx = self.be.rng.permutation(self.num_images)
             self.image_index = [self.image_index[i] for i in shuf_idx]
@@ -999,7 +1031,7 @@ class PASCALVOCInference(PASCALVOC):
     def post_processing(self, outputs, db):
         """
         A post processing on the network output (backend tensor) to get the final
-        bounding boxes and class predictions
+        bounding boxes and class predictions.
 
         The post processing is done in numpy
 
@@ -1088,17 +1120,16 @@ class PASCALVOCInference(PASCALVOC):
 
     def apply_nms(self, all_boxes, thresh):
         """
-        Apply non-maximum suppression to all predicted boxes output
+        Apply non-maximum suppression to all predicted boxes output.
 
         Arguments:
             all_boxes (ndarray, (N, 5)): detections over all classes and all images
                                          all_boxes[cls][image]
-                                        N x 5 array of detections in (x1, y1, x2, y2, score)
+                                         N x 5 array of detections in (x1, y1, x2, y2, score)
             thresh (int): a theshold to eliminate the overlapping boxes
 
         Returns:
             nms_boxes (ndarray): boxes after applying the supression
-
         """
         num_classes = len(all_boxes)
         num_images = len(all_boxes[0])
@@ -1119,14 +1150,14 @@ class PASCALVOCInference(PASCALVOC):
         """
         Apply non-maximum suppression (for each class indepdently) that rejects
         a region if it has an intersection-over-union (IoU) overlap with a higher
-        scoring selected region larger than a learned threshold
+        scoring selected region larger than a learned threshold.
 
         Arguments:
             detections (ndarray): N x 4 array for detected bounding boxes
             scores (ndarray): N x 1 array for scores associated with each box
             thre (int): a theshold to eliminate the overlapping boxes
 
-        Return:
+        Returns:
             keep (ndarray): indices to keep after applying supression
 
         """
@@ -1161,7 +1192,7 @@ class PASCALVOCInference(PASCALVOC):
     def evaluation(self, all_boxes, output_dir='output'):
         """
         Evaluations on all detections which are collected into:
-        all_boxes[cls][image] = N x 5 array of detections in (x1, y1, x2, y2, score)
+        all_boxes[cls][image] = N x 5 array of detections in (x1, y1, x2, y2, score).
         It will write outputs into text format.
         Then call voc_eval function outside of this step to generate mAP metric
         using the text files.
@@ -1170,9 +1201,9 @@ class PASCALVOCInference(PASCALVOC):
             all_boxes (ndarray): detections over all classes and all images
             output_dir (str): where to save the output files
         """
-        print '--------------------------------------------------------------'
-        print 'Computing results with **unofficial** Python eval code.'
-        print '--------------------------------------------------------------'
+        neon_logger.display('--------------------------------------------------------------')
+        neon_logger.display('Computing results with **unofficial** Python eval code.')
+        neon_logger.display('--------------------------------------------------------------')
 
         if not os.path.isdir(output_dir):
             os.mkdir(output_dir)
@@ -1180,7 +1211,7 @@ class PASCALVOCInference(PASCALVOC):
         for cls_ind, cls in enumerate(PASCAL_VOC_CLASSES):
             if cls == '__background__':
                 continue
-            print 'Writing {} VOC results file'.format(cls)
+            neon_logger.display('Writing {} VOC results file'.format(cls))
             filename = 'voc_{}_{}_{}.txt'.format(
                 self.year, self.image_set, cls)
             filepath = os.path.join(output_dir, filename)
@@ -1206,7 +1237,7 @@ class PASCALVOCInference(PASCALVOC):
 
 def calculate_bb_overlap(rp, gt):
     """
-    calculate the overlaps between 2 list of bounding rp
+    Calculate the overlaps between 2 list of bounding rp.
 
     Arguments:
         rp (list): an array of region proposals, shape (R, 4)
@@ -1268,7 +1299,7 @@ def _sample_fg_bg_rois(roidb, fg_rois_per_img, rois_per_img, num_classes,
             fg_inds = np.random.choice(fg_inds, size=fg_rois_per_this_image,
                                        replace=False)
         else:
-            fg_inds = fg_inds[range(fg_rois_per_this_image)]
+            fg_inds = fg_inds[list(range(fg_rois_per_this_image))]
 
     # Select background RoIs as those within [iou_bg_thre_low,
     # iou_bg_thre_high)
@@ -1284,7 +1315,7 @@ def _sample_fg_bg_rois(roidb, fg_rois_per_img, rois_per_img, num_classes,
             bg_inds = np.random.choice(bg_inds, size=bg_rois_per_this_image,
                                        replace=False)
         else:
-            bg_inds = bg_inds[range(bg_rois_per_this_image)]
+            bg_inds = bg_inds[list(range(bg_rois_per_this_image))]
 
     # The indices that we're selecting (both fg and bg)
     keep_inds = np.append(fg_inds, bg_inds)

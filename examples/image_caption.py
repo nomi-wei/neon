@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,19 +14,27 @@
 # limitations under the License.
 # ----------------------------------------------------------------------------
 """
-Example that trains an image captioning model on precomputed image features from
-a CNN and reference sentences. Uses standard image captioning datasets
-[flickr8k, flickr30k, coco] from http://cs.stanford.edu/people/karpathy/deepimagesent/
-that have been stored in pkl format. The model then transforms the image features
-and sentences to the same hidden dimension size and prepends the image to be the
-first word of the sequence which is then fed to a LSTM.
+Train an image captioning model on precomputed image features from a
+CNN and reference sentences.
+
+Uses standard image captioning datasets [flickr8k, flickr30k, coco] from
+http://cs.stanford.edu/people/karpathy/deepimagesent/ that have been stored
+in pkl format. The model then transforms the image features and sentences
+to the same hidden dimension size and prepends the image to be the first
+word of the sequence which is then fed to a LSTM.
 
 Reference:
-https://github.com/karpathy/neuraltalk
+
+    NeuralTalk `[Karpathy2014]`_
+..  _[Karpathy2014]: https://github.com/karpathy/neuraltalk
+
+Usage:
+
+    python examples/image_caption.py
 
 """
-import os
 
+import os
 from neon.backends import gen_backend
 from neon.data import load_flickr8k, ImageCaption, ImageCaptionTest
 from neon.initializers import Uniform, Constant, Array

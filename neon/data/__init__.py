@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2014 Nervana Systems Inc.
+# Copyright 2014-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,6 +14,7 @@
 # ----------------------------------------------------------------------------
 
 from neon.data.dataiterator import NervanaDataIterator, DataIterator, ArrayIterator
+from neon.data.hdf5iterator import HDF5Iterator, HDF5IteratorOneHot, HDF5IteratorAutoencoder
 from neon.data.datasets import Dataset
 from neon.data.dataloaders import (load_mnist, load_cifar10, load_babi, load_flickr8k,
                                    load_flickr30k, load_coco, load_i1kmeta, load_text,
@@ -21,11 +22,10 @@ from neon.data.dataloaders import (load_mnist, load_cifar10, load_babi, load_fli
 from neon.data.text import Text, Shakespeare, PTB, HutterPrize, IMDB
 from neon.data.batch_writer import BatchWriter, BatchWriterI1K
 from neon.data.dataloader import DataLoader
-from neon.data.media import ImageParams, ImageIngestParams, VideoParams
+from neon.data.media import ImageParams, ImageIngestParams, VideoParams, AudioParams
 from neon.data.imageloader import ImageLoader
 from neon.data.questionanswer import BABI, QA
 from neon.data.ticker import Ticker, CopyTask, RepeatCopyTask, PrioritySortTask
-from neon.data.speech import Speech
 from neon.data.video import Video
 from neon.data.imagecaption import ImageCaption, ImageCaptionTest, Flickr8k, Flickr30k, Coco
 from neon.data.image import MNIST, CIFAR10

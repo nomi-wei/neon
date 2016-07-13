@@ -25,7 +25,14 @@ Computation backend
   * A backend must first be generated before running a model using ``gen_backend``.
   * If swapping backends, then buffers must be reinitialized by reinstantiating the
     model layers and calling fprop with the new generated backend.
-  * The backend expects image data to be formatted as CHWN (channels, height, width, minibatch).
+
+Data Layout
+-----------
+
+Neon's layers internally store data as two-dimensional tensors. For convolution and pooling layers, the data
+is formatted in :math:`(C, H, W, N)` layout (:math:`C` = channels, :math:`H` = height, :math:`W` = width, :math:`N` = batch size), and represented as a tensor of shape :math:`(F, N)`, where :math:`F = C * H *W`.
+
+For recurrent layers, the time dimension :math:`T` is added to the :math:`N` dimension, so the data format is :math:`(F, T*N)`. The second dimension is ordered by incrementing the batch index first: :math:`t_1n_1, t_1n_2, ... t_1n_N, t_2n_1, t_2n_2, ...`
 
 Layers
 ------
@@ -47,7 +54,7 @@ Layer buffer allocations
 
   * A layer infers input shape from previous layers and initializes buffers accordingly.
   * Pre-allocating activation buffers allows buffer reuse and reduces memory usage.
-  * Buffers will be reinitalized during the next fprop if the layer is reinstantiated.
+  * Buffers will be reinitialized during the next fprop if the layer is reinstantiated.
 
 * Parameter layers (``Linear``, ``Bias``, ``Convolution``, and ``BatchNorm``) maintain
   their own parameters ``W``, gradients ``dW``, and states ``states`` (for the optimizer).
@@ -84,7 +91,7 @@ Learning
   * a cost function to compute the error
   * callback object that configures whether to use a validation set and how frequent
     in the training to validate, whether to get progress bar display, etc. For more
-    information, please checkout neon fundamentals -- callbacks
+    information, see :doc:`neon fundamentals -- callbacks <callbacks>`.
 
 * During update, the model sends a list containing all layers with learnable parameters
   to the optimizer.

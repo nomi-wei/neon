@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -27,6 +27,12 @@ except ImportError:
 def x_label(epoch_axis):
     """
     Get the x axis label depending on the boolean epoch_axis.
+
+    Arguments:
+        epoch_axis (bool): If true, use Epoch, if false use Minibatch
+
+    Returns:
+        str: "Epoch" or "Minibatch"
     """
     return "Epoch" if epoch_axis else "Minibatch"
 
@@ -34,6 +40,15 @@ def x_label(epoch_axis):
 def cost_fig(cost_data, plot_height, plot_width, epoch_axis=True):
     """
     Generate a figure with lines for each element in cost_data.
+
+    Arguments:
+        cost_data (list): Cost data to plot
+        plot_height (int): Plot height
+        plot_width (int): Plot width
+        epoch_axis (bool, optional): If true, use Epoch, if false use Minibatch
+
+    Returns:
+        bokeh.plotting.figure: cost_data figure
     """
 
     fig = figure(plot_height=plot_height,
@@ -61,6 +76,16 @@ def hist_fig(hist_data, plot_height, plot_width, x_range=None, epoch_axis=True):
     """
     Generate a figure with an image plot for hist_data, bins on the Y axis and
     time on the X axis.
+
+    Arguments:
+        hist_data (tuple): Hist data to plot
+        plot_height (int): Plot height
+        plot_width (int): Plot width
+        x_range (tuple, optional): (start, end) range for x
+        epoch_axis (boolm optional): If true, use Epoch, if false use Minibatch
+
+    Returns:
+        bokeh.plotting.figure: hist_data figure
     """
     name, hdata, dh, dw, bins, offset = hist_data
     if x_range is None:
@@ -71,11 +96,25 @@ def hist_fig(hist_data, plot_height, plot_width, x_range=None, epoch_axis=True):
                  x_axis_label=x_label(epoch_axis),
                  x_range=x_range,
                  y_range=(offset, offset + bins))
-    fig.image(image=[hdata], x=[0],  y=[offset], dw=[dw], dh=[dh], palette="Spectral11")
+    fig.image(image=[hdata], x=[0], y=[offset], dw=[dw], dh=[dh], palette="Spectral11")
     return fig
 
 
 def image_fig(data, h, w, x_range, y_range, plot_size):
+    """
+    Helper function to generate a figure
+
+    Arguments:
+        data (int): data to plot
+        h (int): height
+        w (int): width
+        x_range (tuple, optional): (start, end) range for x
+        y_range (tuple, optional): (start, end) range for y
+        plot_size (int): plot size
+
+    Returns:
+        bokeh.plotting.figure: Generated figure
+    """
     fig = figure(x_range=x_range, y_range=y_range,
                  plot_width=plot_size, plot_height=plot_size,
                  toolbar_location=None)
@@ -86,6 +125,18 @@ def image_fig(data, h, w, x_range, y_range, plot_size):
 
 
 def deconv_figs(layer_name, layer_data, fm_max=8, plot_size=120):
+    """
+    Helper function to generate deconv visualization figures
+
+    Arguments:
+        layer_name (str): Layer name
+        layer_data (list): Layer data to plot
+        fm_max (int): Max layers to process
+        plot_size (int, optional): Plot size
+
+    Returns:
+        tuple if vis_keys, img_keys, fig_dict
+    """
     vis_keys = dict()
     img_keys = dict()
     fig_dict = dict()
@@ -102,8 +153,8 @@ def deconv_figs(layer_name, layer_data, fm_max=8, plot_size=120):
         deconv_fig = image_fig(deconv_data, img_h, img_w, x_range, y_range, plot_size)
 
         title = "{}_fmap_{:04d}".format(layer_name, fm_num)
-        vis_keys[fm_num] = "vis_"+title
-        img_keys[fm_num] = "img_"+title
+        vis_keys[fm_num] = "vis_" + title
+        img_keys[fm_num] = "img_" + title
 
         fig_dict[vis_keys[fm_num]] = deconv_fig
         fig_dict[img_keys[fm_num]] = img_fig
@@ -112,6 +163,14 @@ def deconv_figs(layer_name, layer_data, fm_max=8, plot_size=120):
 
 
 def deconv_summary_page(filename, cost_data, deconv_data):
+    """
+    Generate an HTML page with a Deconv visualization
+
+    Arguments:
+        filename: Output filename
+        cost_data (list): Cost data to plot
+        deconv_data (tuple): deconv data to plot
+    """
     fig_dict = dict()
 
     cost_key = "cost_plot"

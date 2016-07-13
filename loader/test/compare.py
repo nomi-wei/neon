@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -24,6 +24,8 @@ run as follows:
 python compare.py -e1 -r0 -bcpu -w <place where data lives>
 
 """
+from __future__ import print_function
+from builtins import range, str, zip
 import os
 import numpy as np
 from neon.data import ArrayIterator
@@ -34,7 +36,7 @@ from neon.optimizers import GradientDescentMomentum
 from neon.transforms import Misclassification, Rectlin, Softmax, CrossEntropyMulti
 from neon.callbacks.callbacks import Callbacks
 from neon.util.argparser import NeonArgparser
-from neon.data import load_cifar10, BatchWriter
+from neon.data import load_cifar10
 from neon.data import ImageLoader, DataLoader, ImageParams
 from PIL import Image
 from glob import glob
@@ -70,8 +72,8 @@ def load_dataset(basepath, datadir, shuffle):
     if not os.path.exists(path):
         process(basepath)
     subdirs = glob(os.path.join(path, '*'))
-    labelnames = sorted(map(lambda x: os.path.basename(x), subdirs))
-    inds = range(len(labelnames))
+    labelnames = sorted([os.path.basename(x) for x in subdirs])
+    inds = list(range(len(labelnames)))
     labeldict = {key: val for key, val in zip(labelnames, inds)}
     lines = []
     for subdir in subdirs:
@@ -99,20 +101,9 @@ def load_dataset(basepath, datadir, shuffle):
 
 
 def load_cifar10_imgs(path):
-    (X_train, y_train) = load_dataset(path, traindir, shuffle=True)
+    (X_train, y_train) = load_dataset(path, traindir, shuffle=False)
     (X_test, y_test) = load_dataset(path, testdir, shuffle=False)
     return (X_train, y_train), (X_test, y_test), 10
-
-
-def write_batches(args, macrodir, datadir, val_pct):
-    if os.path.exists(macrodir):
-        return
-    print('Writing batches to %s' % macrodir)
-    bw = BatchWriter(out_dir=macrodir,
-                     image_dir=os.path.join(args.data_dir, datadir),
-                     target_size=32, macro_size=1024,
-                     file_pattern='*.png', validation_pct=val_pct)
-    bw.run()
 
 
 def run(args, train, test):
@@ -145,15 +136,13 @@ def test_iterator():
     return run(args, train, test)
 
 
-def test_generic_loader():
+def test_loader():
     print('Testing generic data loader')
     parser = NeonArgparser(__doc__)
     args = parser.parse_args()
 
     train_path = os.path.join(args.data_dir, traindir + '-ingested')
     test_path = os.path.join(args.data_dir, testdir + '-ingested')
-    write_batches(args, train_path, traindir, 0)
-    write_batches(args, test_path, testdir, 1)
 
     params = ImageParams(channel_count=3, height=32, width=32)
     common = dict(media_params=params, target_size=1, nclasses=10)
@@ -161,23 +150,6 @@ def test_generic_loader():
                        **common)
     test = DataLoader('test', repo_dir=os.path.join(args.data_dir, 'test'),
                       **common)
-    err = run(args, train, test)
-    return err
-
-
-def test_loader():
-    print('Testing image loader')
-    parser = NeonArgparser(__doc__)
-    args = parser.parse_args()
-
-    train_archive = os.path.join(args.data_dir, traindir + '-ingested')
-    test_archive = os.path.join(args.data_dir, testdir + '-ingested')
-    write_batches(args, train_archive, traindir, 0)
-    write_batches(args, test_archive, testdir, 1)
-    train = ImageLoader(set_name='train', do_transforms=False, inner_size=32,
-                        scale_range=0, repo_dir=train_archive)
-    test = ImageLoader(set_name='validation', do_transforms=False, inner_size=32,
-                       scale_range=0, repo_dir=test_archive)
     err = run(args, train, test)
     return err
 

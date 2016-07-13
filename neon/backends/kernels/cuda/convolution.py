@@ -1,7 +1,7 @@
-from pycuda.compiler import SourceModule
 from pycuda.tools import context_dependent_memoize
 from neon.backends.cuda_templates import _ew_types
 from neon.backends.layer_gpu import _magic64
+from neon.backends.util.source_module import SourceModule
 
 """
 CUDA kernels for convolutional layers. This code will return one of 3 kernels:
@@ -605,17 +605,17 @@ __global__ void conv_%(operation)s(
     magic = _magic64(filter_size)
 
     code = code % {
-        "filter_size":          filter_size,
-        "magic_filter_size":    magic[0],
-        "shift_filter_size":    magic[1],
-        "type":                 _ew_types[dtype]["type"],
-        "lut_code":             lut_code,
-        "bsum_code":            bsum_code,
-        "operation":            operation,
-        "a_name":               a_name,
-        "b_name":               b_name,
-        "filter_load_cond":     filter_load_cond,
-        "check_filter_cond":    check_filter_cond
+        "filter_size": filter_size,
+        "magic_filter_size": magic[0],
+        "shift_filter_size": magic[1],
+        "type": _ew_types[dtype]["type"],
+        "lut_code": lut_code,
+        "bsum_code": bsum_code,
+        "operation": operation,
+        "a_name": a_name,
+        "b_name": b_name,
+        "filter_load_cond": filter_load_cond,
+        "check_filter_cond": check_filter_cond
     }
 
     options = ["--use_fast_math"]

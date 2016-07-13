@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2014 Nervana Systems Inc.
+# Copyright 2014-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -13,23 +13,31 @@
 # limitations under the License.
 # ----------------------------------------------------------------------------
 """
-Class definitions for stock data sets
+Class definitions for image data sets.
 """
+from __future__ import division
+from future import standard_library
+standard_library.install_aliases()  # triggers E402, hence noqa below
+from builtins import str  # noqa
 
-import cPickle
-import gzip
-import logging
-import numpy as np
-import os
-import tarfile
+import gzip  # noqa
+import logging  # noqa
+import numpy as np  # noqa
+import os  # noqa
+import tarfile  # noqa
 
-from neon.data.datasets import Dataset
-from neon.data.dataiterator import ArrayIterator
+from neon.util.compat import pickle  # noqa
+from neon.util.compat import pickle_load  # noqa
+from neon.data.datasets import Dataset  # noqa
+from neon.data.dataiterator import ArrayIterator  # noqa
 
 logger = logging.getLogger(__name__)
 
 
 class MNIST(Dataset):
+    """
+    MNIST data set from http://yann.lecun.com/exdb/mnist/
+    """
     def __init__(self, path='.', subset_pct=100, normalize=True):
         super(MNIST, self).__init__('mnist.pkl.gz',
                                     'https://s3.amazonaws.com/img-datasets',
@@ -42,10 +50,10 @@ class MNIST(Dataset):
         """
         Fetch the MNIST dataset and load it into memory.
 
-        Args:
+        Arguments:
             path (str, optional): Local directory in which to cache the raw
                                   dataset.  Defaults to current directory.
-            normalize (bool, optional): whether to scale values between 0 and 1.
+            normalize (bool, optional): Whether to scale values between 0 and 1.
                                         Defaults to True.
 
         Returns:
@@ -56,7 +64,7 @@ class MNIST(Dataset):
             self.fetch_dataset(self.url, self.filename, filepath, self.size)
 
         with gzip.open(filepath, 'rb') as mnist:
-            (X_train, y_train), (X_test, y_test) = cPickle.load(mnist)
+            (X_train, y_train), (X_test, y_test) = pickle_load(mnist)
             X_train = X_train.reshape(-1, 784)
             X_test = X_test.reshape(-1, 784)
 
@@ -84,16 +92,16 @@ class MNIST(Dataset):
 
 
 class CIFAR10(Dataset):
-    '''
-    CIFAR10 dataset container
+    """
+    CIFAR10 data set from https://www.cs.toronto.edu/~kriz/cifar.html
 
     Arguments:
-        path (str): local path to copy data files
-        normalize (bool): flag to normalize data
-        whiten (bool): flag to apply whitening transform
-        pad_classes (bool): flag to pad out class count to 16
-                            for compatibility with conv layers on GPU
-    '''
+        path (str): Local path to copy data files.
+        normalize (bool): Flag to normalize data.
+        whiten (bool): Flag to apply whitening transform.
+        pad_classes (bool): Flag to pad out class count to 16
+                            for compatibility with conv layers on GPU.
+    """
     def __init__(self, path='.', subset_pct=100, normalize=True,
                  contrast_normalize=False, whiten=False, pad_classes=False):
         super(CIFAR10, self).__init__('cifar-10-python.tar.gz',
@@ -111,7 +119,7 @@ class CIFAR10(Dataset):
         """
         Fetch the CIFAR-10 dataset and load it into memory.
 
-        Args:
+        Arguments:
             path (str, optional): Local directory in which to cache the raw
                                   dataset.  Defaults to current directory.
             normalize (bool, optional): Whether to scale values between 0 and 1.
@@ -132,7 +140,7 @@ class CIFAR10(Dataset):
         Xlist, ylist = [], []
         for batch in train_batches:
             with open(batch, 'rb') as f:
-                d = cPickle.load(f)
+                d = pickle_load(f)
                 Xlist.append(d['data'])
                 ylist.append(d['labels'])
 
@@ -140,7 +148,7 @@ class CIFAR10(Dataset):
         y_train = np.vstack(ylist)
 
         with open(os.path.join(batchdir, 'test_batch'), 'rb') as f:
-            d = cPickle.load(f)
+            d = pickle_load(f)
             X_test, y_test = d['data'], d['labels']
 
         y_train = y_train.reshape(-1, 1)
@@ -185,13 +193,13 @@ class CIFAR10(Dataset):
     @staticmethod
     def _compute_zca_transform(imgs, filter_bias=0.1):
         """
-        Compute the zca whitening transform matrix
+        Compute the zca whitening transform matrix.
         """
         logger.info("Computing ZCA transform matrix")
         meanX = np.mean(imgs, 0)
 
         covX = np.cov(imgs.T)
-        D, E = np.linalg.eigh(covX)
+        D, E = np.linalg.eigh(covX + filter_bias * np.eye(covX.shape[0], covX.shape[1]))
 
         assert not np.isnan(D).any()
         assert not np.isnan(E).any()
@@ -210,13 +218,13 @@ class CIFAR10(Dataset):
         """
         if cache and os.path.isfile(cache):
             with open(cache, 'rb') as f:
-                (meanX, W) = cPickle.load(f)
+                (meanX, W) = pickle_load(f)
         else:
             meanX, W = CIFAR10._compute_zca_transform(train)
             if cache:
                 logger.info("Caching ZCA transform matrix")
                 with open(cache, 'wb') as f:
-                    cPickle.dump((meanX, W), f)
+                    pickle.dump((meanX, W), f, 2)
 
         logger.info("Applying ZCA whitening transform")
         train_w = np.dot(train - meanX, W)
@@ -227,7 +235,7 @@ class CIFAR10(Dataset):
     @staticmethod
     def global_contrast_normalize(X, scale=1., min_divisor=1e-8):
         """
-        Subtract mean and normalize by vector norm
+        Subtract mean and normalize by vector norm.
         """
 
         X = X - X.mean(axis=1)[:, np.newaxis]

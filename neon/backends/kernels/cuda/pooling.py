@@ -1,5 +1,4 @@
-
-from pycuda.compiler import SourceModule
+from builtins import str
 from pycuda.tools import context_dependent_memoize
 from neon.backends import cuda_templates
 
@@ -8,6 +7,7 @@ from neon.backends.cuda_templates import (_common_fp16_to_fp32,
                                           _common_max_abs,
                                           _common_kepler,
                                           _ew_types)
+from neon.backends.util.source_module import SourceModule
 
 """
 CUDA kernels for pooling layers, with support for max pooling and average pooling.
@@ -24,9 +24,9 @@ def map_string2func(funcname, clss, compute_capability):
     """
     Helper function that converts string function names to function calls
     """
-    if "_get_"+funcname not in globals():
+    if "_get_" + funcname not in globals():
         raise AttributeError("kernel type '" + funcname + "' not understood")
-    return globals()["_get_"+funcname](clss, compute_capability)
+    return globals()["_get_" + funcname](clss, compute_capability)
 
 
 # this template is used to hide variables that are only defined conditionally.
@@ -1468,7 +1468,7 @@ __global__ void spool_bprop_avg_overlap(
 
 
 @context_dependent_memoize
-def _get_bprop_max_overlap_smallN(clss):
+def _get_bprop_max_overlap_smallN(clss, compute_capability):
 
     code = r"""
 %(common)s
@@ -1655,7 +1655,7 @@ __global__ void spool_bprop_max_overlap_smallN(
     %(atomic_max)s
 }
 """
-    template_vals = prepare_template_vals(clss)
+    template_vals = prepare_template_vals(clss, compute_capability)
     code = code % template_vals
     module = SourceModule(code)
     kernel = module.get_function("spool_bprop_max_overlap_smallN")
@@ -1664,7 +1664,7 @@ __global__ void spool_bprop_max_overlap_smallN(
 
 
 @context_dependent_memoize
-def _get_bprop_avg_overlap_smallN(clss):
+def _get_bprop_avg_overlap_smallN(clss, compute_capability):
 
     code = r"""
 
@@ -1857,7 +1857,7 @@ __global__ void spool_bprop_avg_overlap_smallN(
 
 }
 """
-    template_vals = prepare_template_vals(clss)
+    template_vals = prepare_template_vals(clss, compute_capability)
     code = code % template_vals
     # f = open("pool.cu", "w")
     # print >>f, code

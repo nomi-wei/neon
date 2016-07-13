@@ -13,13 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ----------------------------------------------------------------------------
-
 import os
 from setuptools import setup, find_packages, Command
 import subprocess
 
 # Define version information
-VERSION = '1.4.0'
+VERSION = '1.5.3'
 FULLVERSION = VERSION
 write_version = True
 
@@ -71,10 +70,12 @@ setup(name='neon',
       url='http://www.nervanasys.com',
       license='License :: OSI Approved :: Apache Software License',
       scripts=['bin/neon', 'bin/nvis'],
-      packages=find_packages(exclude=["tests"]),
+      packages=find_packages(),
       package_data={'neon': ['backends/kernels/sass/*.sass',
                              'backends/kernels/cubin/*.cubin',
-                             'data/loader/*.so']},
+                             'backends/kernels/maxas/*.pl',
+                             'backends/kernels/maxas/MaxAs/*.pm',
+                             '../loader/bin/*.so']},
       classifiers=['Development Status :: 3 - Alpha',
                    'Environment :: Console',
                    'Environment :: Console :: Curses',
@@ -85,7 +86,8 @@ setup(name='neon',
                    'License :: OSI Approved :: Apache Software License',
                    'Operating System :: POSIX',
                    'Operating System :: MacOS :: MacOS X',
-                   'Programming Language :: Python',
+                   'Programming Language :: Python :: 2',
+                   'Programming Language :: Python :: 3',
                    'Topic :: Scientific/Engineering :: ' +
                    'Artificial Intelligence',
                    'Topic :: Scientific/Engineering :: Information Analysis',

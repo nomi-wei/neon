@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2014 Nervana Systems Inc.
+# Copyright 2014-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -13,9 +13,8 @@
 # limitations under the License.
 # ----------------------------------------------------------------------------
 """
-Functions used to load commonly available datasets.
+Deprecated, use Datasets classes instead. Functions used to load commonly available datasets.
 """
-
 import logging
 
 from neon.data.datasets import Dataset

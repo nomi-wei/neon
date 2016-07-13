@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2014 Nervana Systems Inc.
+# Copyright 2014-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -16,12 +16,14 @@
 Our CPU based backend interface and tensor data structure. Our implementation
 wraps :mod:`numpy` ndarray and related operations
 """
-
+from __future__ import division
+from builtins import object, round, str, zip
 import numpy as np
 import logging
 import time
 from neon.backends.backend import Tensor, Backend, OpTreeNode, OpCollection
 from neon.backends.layer_cpu import ConvLayer, DeconvLayer, PoolLayer
+from neon.util.compat import xrange
 
 _none_slice = slice(None, None, None)
 
@@ -39,8 +41,8 @@ class CPUTensor(Tensor):
 
     Arguments:
         dtype (numpy.ndtype, optional): underlying data type of the elements.
-        ary   (data array, optional): optionally it can be Instantiated with
-                                        a data array
+        ary (data array, optional): optionally it can be instantiated with
+                                    a data array
         persist_values (bool, optional): If set to True (the default), the
                                          values assigned to this Tensor will
                                          persist across multiple begin and end
@@ -50,7 +52,7 @@ class CPUTensor(Tensor):
                                          calls
 
     See also:
-        NervanaCPU class
+        :class:`NervanaCPU` class
     """
     _tensor = None
 
@@ -91,7 +93,7 @@ class CPUTensor(Tensor):
             for dim in self.shape:
                 size *= dim
         except TypeError:
-            assert isinstance(self.shape, (int, long, np.integer))
+            assert isinstance(self.shape, (int, np.integer))
             size = self.shape
             self.shape = (self.shape,)
 
@@ -209,7 +211,7 @@ class CPUTensor(Tensor):
         for int and uint types, when overflow happens
 
         Arguments:
-            value (GPUTensor, OpTreeNode, numeric): the value to be assigned.
+            value (CPUTensor, OpTreeNode, numeric): the value to be assigned.
 
         """
         if isinstance(value, (CPUTensor, OpTreeNode)):
@@ -245,7 +247,7 @@ class CPUTensor(Tensor):
 
     def get(self):
         """
-        return the array
+        Return the array.
         """
         return self._tensor.copy()
 
@@ -268,7 +270,7 @@ class CPUTensor(Tensor):
 
     def take(self, indices, axis=None):
         """
-        Select a subset of elements from an array across an axis
+        Select a subset of elements from an array across an axis.
 
         Arguments:
             indices (Tensor, numpy ndarray): indicies of elements to select
@@ -318,12 +320,20 @@ class CPUTensor(Tensor):
         return self._assign(a)
 
     def copy_from(self, a):
-        """ alias of copy """
+        """
+        Alias of copy.
+
+        Arguments:
+            a (Tensor): the object to copy
+
+        Returns:
+            Tensor: new array object with the same values as input tensor
+        """
         return self._assign(a)
 
     def reshape(self, *shape):
         """
-        return a reshaped view
+        Return a reshaped view.
         """
         if isinstance(shape[0], (tuple, list)):
             shape = tuple(shape[0])
@@ -340,7 +350,7 @@ class CPUTensor(Tensor):
     @property
     def T(self):
         """
-        Return a transposed view
+        Return a transposed view.
 
         For 2D tensor, will do a normal transpose
         For 3D tensor, will keep the 0 dim, swap the 1 and 2 dimensions
@@ -370,7 +380,7 @@ class CPUTensor(Tensor):
 
     def share(self, shape, dtype=None, name=None):
         """
-        return a view: ary, where ary.size <= self.size
+        Return a view: ary, where ary.size <= self.size.
         Allows easy sharing of temporary memory
         This is mostly provided for compatibility, -- dtype is ignored
         """
@@ -415,12 +425,12 @@ class CPUTensor(Tensor):
     #         ary=self._tensor.repeat(repeats, axis))
 
 
-class CustomNumpy:
+class CustomNumpy(object):
 
     @staticmethod
     def argmax(x, axis=1, keepdims=True):
         """
-        calls numpy argmax with keepdims
+        Calls numpy argmax with keepdims.
         """
         new_shape = list(x.shape)
         new_shape[axis] = 1
@@ -430,7 +440,7 @@ class CustomNumpy:
     @staticmethod
     def argmin(x, axis=1, keepdims=True):
         """
-        calls numpy argmin with keepdims
+        Calls numpy argmin with keepdims.
         """
         new_shape = list(x.shape)
         new_shape[axis] = 1
@@ -488,7 +498,7 @@ numpy_call_dict = {
 class NervanaCPU(Backend):
 
     """
-    Sets up a :mod:`numpy` based backend for matrix ops.  By default, we use
+    Sets up a :mod:`numpy` baseyd backend for matrix ops.  By default, we use
     32-bit element data types for any arrays constructed.
 
     Attributes:
@@ -496,15 +506,22 @@ class NervanaCPU(Backend):
         tensor_cls: underlying Tensor type. For CPU backend, it will be CPU tensor
 
     See also:
-        CPUTensor
+        :class:`CPUTensor`
     """
+    backend_name = 'cpu'
 
     def __init__(self,
                  rng_seed=None,
                  default_dtype=np.float32,
                  hist_bins=64,
                  hist_offset=-48,
-                 compat_mode=None):
+                 compat_mode=None,
+                 # Ignored
+                 num_devices=None,
+                 stochastic_round=None,
+                 device_id=None,
+                 deterministic=None
+                 ):
 
         if default_dtype not in [np.float16, np.float32, np.float64]:
             logger.error('Default data type for nervanagpu '
@@ -530,22 +547,48 @@ class NervanaCPU(Backend):
 
         logger.info("Initialized NervanaCPU")
 
-        self.hist_bins = hist_bins
-        self.hist_offset = hist_offset
-        self.hist_max = 4096
-        self.hist_buf = self.empty((self.hist_max, hist_bins), dtype=np.int32)
-        self.hist_idx = 0
-        self.hist_map = dict()
+        self.hist_bins, self.hist_offset = None, None
+        self.set_hist_buffers(hist_bins, hist_offset)
+
+    def set_hist_buffers(self, hist_bins, hist_offset):
+        if (hist_bins != self.hist_bins or hist_offset != self.hist_offset):
+            self.hist_bins = hist_bins
+            self.hist_offset = hist_offset
+            self.hist_max = 4096
+            self.hist_buf = self.empty((self.hist_max, hist_bins), dtype=np.int32)
+            self.hist_idx = 0
+            self.hist_map = dict()
 
     def gen_rng(self, seed=None):
+        """
+        Generate the random number generator on host.
+
+        Arguments:
+            seed (int): random number generator seed
+
+        Returns:
+            seeded numpy RNG
+        """
         self.rng = np.random.RandomState(seed)
         self.init_rng_state = self.rng_get_state()
         return self.rng
 
     def rng_set_state(self, state):
+        """
+        Set the RNG state for host RNG.
+
+        Arguments:
+            state (np.array): numpy random number state vector
+        """
         self.rng.set_state(state)
 
     def rng_get_state(self):
+        """
+        Return the current state of the on-host RNG.
+
+        Returns:
+            np.array: the on-host RNG state vectors
+        """
         return self.rng.get_state()
 
     def rng_reset(self):
@@ -557,7 +600,7 @@ class NervanaCPU(Backend):
 
     def fill_normal(self, ary, mean=0, stdv=1):
         """
-        Fill ary with normally distributed random numbers
+        Fill ary with normally distributed random numbers.
 
         Arguments:
             ary (Tensor): Tensor to fill with random values
@@ -568,9 +611,11 @@ class NervanaCPU(Backend):
 
     def execute(self, optree):
         """
+        Execute the optree. Break optree into sub-optrees if necessary.
+
         Arguments:
             optree: (OpTreeNode): the OpTreeNode object that represents all
-                                    the operations
+                                  the operations
         """
         # deal with onehot specially for now
         if (len(optree) == 3 and isinstance(optree[2], OpTreeNode) and
@@ -586,7 +631,7 @@ class NervanaCPU(Backend):
             numpy_ind0 = optree[2][0]['idx']._tensor.squeeze()
 
             numpy_ind_len = numpy_ind0.size
-            numpy_ind1 = range(numpy_ind_len)
+            numpy_ind1 = list(range(numpy_ind_len))
 
             # ind for indexing
             numpy_ind = np.zeros((2, numpy_ind_len), dtype=np.int32)
@@ -812,7 +857,7 @@ class NervanaCPU(Backend):
         Doing following operations (* is dot product)
         C = alpha * A * B   + beta * C
         C = alpha * A.T * B + beta * C
-        C = alpha * A * B.T + beta * C
+        C = alpha * A * B.T + beta * C.
 
         relu: if true applied before output (and prior to beta addition)
 
@@ -866,9 +911,9 @@ class NervanaCPU(Backend):
     def batched_dot(self, A, B, C, alpha=1.0, beta=0.0, relu=False):
         """
         Doing following operations:
-        1. For fprop: A(K, C), B(X,C,N), C(X,K,N) --> call batched_dot(A, B, C)
-        2. For bprop: A(K, C), B(X,K,N), C(X,C,N) --> call batched_dot(A.T, B, C)
-        3. For update: A(X,K,N), B(X,C,N), C(K,C) --> call batched_dot(A, B.T, C)
+        1 For fprop: A(K, C), B(X,C,N), C(X,K,N) --> call batched_dot(A, B, C)
+        2 For bprop: A(K, C), B(X,K,N), C(X,C,N) --> call batched_dot(A.T, B, C)
+        3 For update: A(X,K,N), B(X,C,N), C(K,C) --> call batched_dot(A, B.T, C).
 
         Arguments:
             A, B (CPUTensor): input operands
@@ -946,8 +991,7 @@ class NervanaCPU(Backend):
                    D=1, H=1, W=1,
                    T=1, R=1, S=1,
                    pad_d=0, pad_h=0, pad_w=0,
-                   str_d=1, str_h=1, str_w=1,
-                   bsum=False):
+                   str_d=1, str_h=1, str_w=1):
         """
         Create a new ConvLayer parameter object.
         This then is passed as an argument to all the convolution operations.
@@ -976,56 +1020,45 @@ class NervanaCPU(Backend):
         return ConvLayer(self, dtype, N, C, K, D, H, W, T, R, S,
                          pad_d, pad_h, pad_w, str_d, str_h, str_w)
 
-    def fprop_conv(self, layer, I, F, O, alpha=1.0, relu=False, bsum=None, beta=0.0):
+    def fprop_conv(self, layer, I, F, O,
+                   X=None, bias=None, bsum=None,
+                   alpha=1.0, beta=0.0,
+                   relu=False, brelu=False, slope=0.0):
         """
         Forward propagate the inputs of a convolutional network layer to
-        produce output
+        produce output.
 
         Arguments:
             layer: the conv layer as a parameter object
             I (CPUTensor): inputs
             F (CPUTensor): the weights (filters)
             O (CPUTensor): outputs
-            alpha (float): linear scaling
-            relu (boolean): apply ReLu or not before output
-                            (currently not implemented)
-            beta (float): accumulation value into O
+
+        Compounding Options:
+            X: tensor to use in bprop_relu or beta
+                can be same as O for beta accumulate (this is default when None)
+                should be same shape as O
+            bias: (K,1) tensor to use for adding bias to output
+                O += bias
+            bsum: (K,1) tensor to accumulate batch sum over (used in batchnorm or bprop_bias)
+                bsum = sum(O.reshape(K,-1), axis=1)
+                the sum operation is fully deterministic
+            alpha, beta:
+                O = alpha*O + beta*X
+                O = alpha*O + beta*O   (if X==O)
+            relu, slope: boolean flag to apply:
+                O = max(O, 0) + beta*min(O, 0)
+                can be combined with bias (where bias is added first)
+            brelu, slope: boolean flag to apply:
+                O *= (X > 0) + beta*(X < 0)
+                can be combined with bsum tensor to output bprop_bias
         """
-        assert layer.sizeI == I.size
-        assert layer.sizeF == F.size
-        assert layer.sizeO == O.size
+        layer.xprop_conv(I, F, O, X, bias, bsum, alpha, beta, relu, brelu, slope)
 
-        M, P, Q = layer.MPQ
-        C, D, H, W, N = layer.dimI
-        C, T, R, S, K = layer.dimF
-        K, M, P, Q, N = layer.dimO
-
-        pad_d, pad_h, pad_w = layer.padding
-        str_d, str_h, str_w = layer.strides
-
-        array_I = I._tensor.reshape(layer.dimI)
-        array_F = F._tensor.reshape(layer.dimF)
-        array_O = O._tensor.reshape(layer.dimO)
-
-        for m in range(M):
-            sliceT, sliceD, _ = layer.mSlice[m]
-
-            for p in range(P):
-                sliceR, sliceH, _ = layer.pSlice[p]
-
-                for q in range(Q):
-                    sliceS, sliceW, _ = layer.qSlice[q]
-
-                    slicedF = array_F[:, sliceT, sliceR, sliceS, :].reshape((-1, K))
-                    slicedI = array_I[:, sliceD, sliceH, sliceW, :].reshape((-1, N))
-
-                    array_O[:, m, p, q, :] = beta * array_O[:, m, p, q, :] + alpha * \
-                        np.dot(slicedF.T,  slicedI)
-
-        if bsum is not None:
-            bsum[:] = array_O.sum((1, 2, 3, 4))
-
-    def bprop_conv(self, layer, F, E, grad_I, alpha=1.0, relu=False, bsum=None, beta=0.0):
+    def bprop_conv(self, layer, F, E, grad_I,
+                   X=None, bias=None, bsum=None,
+                   alpha=1.0, beta=0.0,
+                   relu=False, brelu=False, slope=0.0):
         """
         Backward propagate the error through a convolutional network layer.
 
@@ -1034,62 +1067,30 @@ class NervanaCPU(Backend):
             F (CPUTensor): the weights (filters)
             E (CPUTensor): errors
             grad_I (CPUTensor): gradient to inputs (output delta)
-            alpha (float): linear scaling
-            beta (float): accumulation value into grad_I
-            relu (boolean): apply ReLu or not before output
-                            (currently not implemented)
+
+        Compounding Options:
+            X: tensor to use in bprop_relu or beta
+                can be same as grad_I for beta accumulate (this is default when None)
+                should be same shape as grad_I
+            bias: (K,1) tensor to use for adding bias to output
+                grad_I += bias
+            bsum: (K,1) tensor to accumulate batch sum over (used in batchnorm or bprop_bias)
+                bsum = sum(grad_I.reshape(K,-1), axis=1)
+                the sum operation is fully deterministic
+            alpha, beta:
+                grad_I = alpha*grad_I + beta*X
+                grad_I = alpha*grad_I + beta*grad_I   (if X==grad_I)
+            relu, slope: boolean flag to apply:
+                grad_I = max(grad_I, 0) + slope*min(grad_I, 0)
+                can be combined with bias (where bias is added first)
+            brelu, slope: boolean flag to apply:
+                grad_I *= (X > 0) + slope*(X < 0)
+                can be combined with bsum tensor to output bprop_bias
         """
-        assert layer.sizeF == F.size
-        assert layer.sizeO == E.size
-        assert layer.sizeI == grad_I.size
+        layer.xprop_conv(E, F, grad_I, X, bias, bsum, alpha, beta, relu, brelu, slope,
+                         backward=True)
 
-        M, P, Q = layer.MPQ
-        C, D, H, W, N = layer.dimI
-        C, T, R, S, K = layer.dimF
-        K, M, P, Q, N = layer.dimO
-
-        pad_d, pad_h, pad_w = layer.padding
-        str_d, str_h, str_w = layer.strides
-
-        array_F = F._tensor.reshape(layer.dimF)
-        array_E = E._tensor.reshape(layer.dimO)
-        array_grad_I = grad_I._tensor.reshape(layer.dimI)
-
-        array_F = np.transpose(array_F, (4, 1, 2, 3, 0)).copy()
-
-        for d in range(D):
-            sliceT, sliceM = layer.dSlice[d]
-
-            for h in range(H):
-                sliceR, sliceP = layer.hSlice[h]
-
-                for w in range(W):
-                    sliceS, sliceQ = layer.wSlice[w]
-
-                    sliceTRS = np.array([
-                        t * R * S + r * S + s
-                        for t in sliceT
-                        for r in sliceR
-                        for s in sliceS], dtype=np.intp)
-
-                    sliceMPQ = np.array([
-                        m * P * Q + p * Q + q
-                        for m in sliceM
-                        for p in sliceP
-                        for q in sliceQ], dtype=np.intp)
-
-                    slicedF = array_F.reshape(
-                        (K, -1, C))[:, sliceTRS, :].reshape((-1, C))
-                    slicedE = array_E.reshape(
-                        (K, -1, N))[:, sliceMPQ, :].reshape((-1, N))
-
-                    array_grad_I[:, d, h, w, :] = beta * array_grad_I[:, d, h, w, :] + alpha * \
-                        np.dot(slicedF.T, slicedE)
-        # If this is the forward pass for deconv, compute bsum here
-        if bsum is not None:
-            bsum[:] = self.sum(grad_I.reshape(C, -1), 1)
-
-    def update_conv(self, layer, I, E, U, alpha=1.0):
+    def update_conv(self, layer, I, E, U, alpha=1.0, beta=0.0):
         """
         Compute the updated gradient for a convolutional network layer.
 
@@ -1099,44 +1100,20 @@ class NervanaCPU(Backend):
             E (CPUTensor): the errors
             U (CPUTensor): the updates
             alpha (float): linear scaling
+            beta  (float): scaled accumulation
         """
         assert layer.sizeI == I.size
         assert layer.sizeO == E.size
         assert layer.sizeF == U.size
 
-        C, D, H, W, N = layer.dimI
-        C, T, R, S, K = layer.dimF
-        K, M, P, Q, N = layer.dimO
-
-        pad_d, pad_h, pad_w = layer.padding
-        str_d, str_h, str_w = layer.strides
-
-        array_I = I._tensor.reshape(layer.dimI)
-        array_E = E._tensor.reshape(layer.dimO)
-        array_U = U._tensor.reshape(layer.dimF)
-        array_U.fill(0.)
-
-        for m in range(M):
-            sliceT, sliceD, tlen = layer.mSlice[m]
-
-            for p in range(P):
-                sliceR, sliceH, rlen = layer.pSlice[p]
-
-                for q in range(Q):
-                    sliceS, sliceW, slen = layer.qSlice[q]
-
-                    slicedI = array_I[:, sliceD, sliceH, sliceW, :].reshape((-1, N))
-                    slicedE = array_E[:, m, p, q, :]
-                    array_U[:, sliceT, sliceR, sliceS, :] += alpha * np.dot(
-                        slicedI, slicedE.T).reshape((C, tlen, rlen, slen, K))
+        layer.update_conv(I, E, U, alpha, beta)
 
     def deconv_layer(self, dtype,
                      N, C, K,
                      P, Q,
                      R=1, S=1,
                      pad_d=0, pad_h=0, pad_w=0,
-                     str_d=1, str_h=1, str_w=1,
-                     bsum=False):
+                     str_d=1, str_h=1, str_w=1):
         """
         Create a new PoolLayer parameter object.
         This then is passed as an argument to all pooling kernels.
@@ -1182,7 +1159,7 @@ class NervanaCPU(Backend):
         Leave spatial dimensions at 1 to allow feature map pooling in the fc layers.
         """
         assert J % 2 == 1, "Only support odd LRN window size"
-        pad_c = J / 2
+        pad_c = J // 2
         op = 'lrn'
         # Bunch of defaults since we're only interested in the k-axis
         lrn_opts = dict(T=1, R=1, S=1,
@@ -1427,7 +1404,7 @@ class NervanaCPU(Backend):
                         sliceB = array_delta[patch_in].reshape((-1, N))
                         if op == "max":
                             max_n = array_argmax[patch_out]
-                            sliceB[max_n, range(N)] += array_E[patch_out]
+                            sliceB[max_n, list(range(N))] += array_E[patch_out]
                         elif op == "avg":
                             sliceB += array_E[patch_out] * (1.0 / sliceB.shape[0])
                         else:
@@ -1436,19 +1413,19 @@ class NervanaCPU(Backend):
 
     def _roipooling_slice(self, h, stride, H, roi_offset):
         """
-        slicing for ROIPooling along one dimension
+        Slicing for ROIPooling along one dimension.
         h: is the index on the pooled map (output index)
         stride:
         H: the max of the input map
         roi_offset: how far hstart is from 0
         """
         hstart = int(np.floor(float(h) * stride))
-        hend = int(np.ceil(float(h+1) * stride))
+        hend = int(np.ceil(float(h + 1) * stride))
 
         hstart = min(max(hstart + roi_offset, 0), H)
         hend = min(max(hend + roi_offset, 0), H)
 
-        return slice(hstart, hend), hend-hstart
+        return slice(hstart, hend), hend - hstart
 
     def roipooling_fprop(self, I, rois, O, argmax, roi_count, C, H, W,
                          pooled_height, pooled_width, spatial_scale):
@@ -1487,8 +1464,8 @@ class NervanaCPU(Backend):
             roi_width = max(xmax - xmin + 1, 1)
             roi_height = max(ymax - ymin + 1, 1)
 
-            stride_h = float(roi_height)/float(pooled_height)
-            stride_w = float(roi_width)/float(pooled_width)
+            stride_h = float(roi_height) / float(pooled_height)
+            stride_w = float(roi_width) / float(pooled_width)
 
             for h_out in xrange(pooled_height):
                 sliceh, lenh = self._roipooling_slice(h_out, stride_h, H, ymin)
@@ -1512,7 +1489,7 @@ class NervanaCPU(Backend):
     def roipooling_bprop(self, I, rois, O, argmax, roi_count, C, H, W,
                          pooled_height, pooled_width, spatial_scale):
         """
-        Function to perform bprop of ROIPooling
+        Function to perform bprop of ROIPooling.
 
         Arguments:
             I (Tensor): input errors (C, pooled_height, pooled_width, roi_count)
@@ -1543,12 +1520,12 @@ class NervanaCPU(Backend):
             roi_width = max(xmax - xmin + 1, 1)
             roi_height = max(ymax - ymin + 1, 1)
 
-            stride_h = float(roi_height)/float(pooled_height)
-            stride_w = float(roi_width)/float(pooled_width)
+            stride_h = float(roi_height) / float(pooled_height)
+            stride_w = float(roi_width) / float(pooled_width)
 
             # iterate all the w, h (from feature map) that fall into this ROIs
-            for w in range(xmin, xmax+1):
-                for h in range(ymin, ymax+1):
+            for w in range(xmin, xmax + 1):
+                for h in range(ymin, ymax + 1):
                     phstart = int(np.floor(float(h - ymin) / stride_h))
                     phend = int(np.ceil(float(h - ymin + 1) / stride_h))
                     pwstart = int(np.floor(float(w - xmin) / stride_w))
@@ -1622,12 +1599,12 @@ class NervanaCPU(Backend):
         Backward propagate lookup table layer.
 
         Arguments:
-            nin (integer): Number of input word_ids.
+            nin (int): Number of input word_ids.
             inputs (Tensor): Input tensor.
             error (Tensor): Error tensor.
             error_t (Tensor): Transposed error tensor.
             dW (Tensor): Gradient tensor (delta).
-            pad_idx (integer):
+            pad_idx (int):
             alpha (float):
             beta (float):
         """
@@ -1667,7 +1644,7 @@ class NervanaCPU(Backend):
 
     def Relu(self, ary, out=None):
         """
-        Calculates the ReLu transformation for input array
+        Calculates the ReLu transformation for input array.
 
         Arguments:
             ary: numpy array
@@ -1680,7 +1657,7 @@ class NervanaCPU(Backend):
 
     def init_mark(self):
         """
-        Generate a timing mark object
+        Generate a timing mark object.
 
         Returns:
             timing mark (dict)
@@ -1689,7 +1666,7 @@ class NervanaCPU(Backend):
 
     def record_mark(self, marker):
         """
-        Mark the current time
+        Mark the current time.
 
         Arguments:
             marker (time mark): timing mark generated by init_mark()
@@ -1698,7 +1675,7 @@ class NervanaCPU(Backend):
 
     def synchronize_mark(self, marker):
         """
-        Synchronize on the given marker
+        Synchronize on the given marker.
 
         Arguments:
             marker (time mark): timing mark generated by init_mark()
@@ -1708,7 +1685,7 @@ class NervanaCPU(Backend):
 
     def get_time(self, start, end):
         """
-        Return time between start and end marks
+        Return time between start and end marks.
 
         Arguments:
             start (time maker): start time mark
@@ -1718,4 +1695,4 @@ class NervanaCPU(Backend):
         Returns:
             time elapsed between start and end time marks in milliseconds
         """
-        return (end['time'] - start['time'])*1000.0
+        return (end['time'] - start['time']) * 1000.0

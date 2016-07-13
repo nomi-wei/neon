@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -46,7 +46,7 @@ def pytest_generate_tests(metafunc):
         # weight ranges
         w_rng = [[0.0, 1.0], [-1.0, 0.0], [-1.0, 1.0]]
         if metafunc.config.option.all:
-            rng_max = [eps, eps*10, 1.0, 2048.0, 1.0e6, 1.0e10]
+            rng_max = [eps, eps * 10, 1.0, 2048.0, 1.0e6, 1.0e10]
         else:
             rng_max = [eps, 1.0, 1.0e10]
         fargs = itt.product(w_rng, rng_max)
@@ -101,12 +101,12 @@ def test_linear_ones(backend_default, basic_linargs):
     layer.set_deltas([layer.be.iobuf(nin)])
     out = layer.fprop(inp).get()
     w = layer.W.get()
-    sums = np.sum(w, 1).reshape((nout, 1))*np.ones((1, batch_size))
+    sums = np.sum(w, 1).reshape((nout, 1)) * np.ones((1, batch_size))
 
     # for larger layers need to estimate numerical precision
     # atol = est_mm_prec(w, inp.get())
     assert (np.allclose(sums, out, atol=0.0, rtol=0.0), '%e'
-            % np.max(np.abs(out-sums)))
+            % np.max(np.abs(out - sums)))
     return
 
 

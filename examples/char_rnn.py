@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,12 +14,18 @@
 # limitations under the License.
 # ----------------------------------------------------------------------------
 """
-Example that trains a network with one recurrent layer of tanh units.
-The dataset uses Penn treebank data parsing on character-level.
+Train a network with one recurrent layer of tanh units on the Penn
+treebank data parsing on character-level.
 
 Reference:
+
   Advances in optimizing recurrent networks `[Pascanu2012]`_
 .. _[Pascanu2012]: http://arxiv.org/pdf/1212.0901.pdf
+
+Usage:
+
+    python examples/char_rnn.py
+
 """
 
 from neon.backends import gen_backend

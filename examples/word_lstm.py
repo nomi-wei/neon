@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # ----------------------------------------------------------------------------
-# Copyright 2015 Nervana Systems Inc.
+# Copyright 2015-2016 Nervana Systems Inc.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,16 +14,17 @@
 # limitations under the License.
 # ----------------------------------------------------------------------------
 """
-Example that trains an LSTM or GRU based recurrent networks.
-The dataset uses Penn Treebank dataset parsing on word-level.
+Train a LSTM or GRU based recurrent network on Penn Treebank data.
 
-Reference:
+References:
+
     Recurrent Neural Network Regularization `[Zaremba2015]`_
     Generating sequences with recurrent neural networks `[Graves2014]`_
 .. _[Zaremba2015]: http://arxiv.org/pdf/1409.2329v5.pdf
 .. _[Graves2014]: http://arxiv.org/pdf/1308.0850.pdf
 
 Usage:
+
     python examples/word_lstm.py -e 13 -eval 1 --rlayer_type lstm
 
 """
@@ -93,7 +94,7 @@ cost = GeneralizedCost(costfunc=CrossEntropyMulti(usebits=True))
 model = Model(layers=layers)
 
 # vanilla gradient descent with decay schedule on learning rate and gradient scaling
-learning_rate_sched = Schedule(range(5, args.epochs), .5)
+learning_rate_sched = Schedule(list(range(5, args.epochs)), .5)
 optimizer = GradientDescentMomentum(1, 0, gradient_clip_norm=gradient_clip_norm,
                                     schedule=learning_rate_sched)
 
